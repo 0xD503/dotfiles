@@ -1,11 +1,16 @@
 [alias]
 	st = status
-    stu = "status -uno"
 	co = checkout
 	ci = commit
 	br = branch
-    df = diff
-    lg = "log --oneline --graph"
-    mg = merge
-    rb = rebase
-	upload = push -u --all
+	upload = push --all
+	stu = status -uno
+	df = diff
+	lg = log --oneline --graph
+	mg = merge
+	rb = rebase
+[user]
+	name = Ruslan Vostretsov
+	email = Rus1995_95@mail.ru
+[core]
+	editor = emacs -nw
