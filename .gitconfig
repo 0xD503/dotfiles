@@ -1,0 +1,11 @@
+[alias]
+	st = status
+    stu = "status -uno"
+	co = checkout
+	ci = commit
+	br = branch
+    df = diff
+    lg = "log --oneline --graph"
+    mg = merge
+    rb = rebase
+	upload = push -u --all
