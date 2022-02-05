@@ -24,8 +24,8 @@
 
 (require 'setup-general)
 ;(require 'setup-helm)
-;(require 'setup-helm-gtags)
-(require 'setup-ggtags)
+(require 'setup-helm-gtags)
+;(require 'setup-ggtags)
 (require 'setup-cedet)
 (require 'setup-editing)
 
@@ -55,7 +55,7 @@
  '(fci-rule-color "#4C566A")
  '(global-linum-mode t)
  '(package-selected-packages
-   '(iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
+   '(helm-gtags iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
  '(ps-font-size '(17 . 18.5))
  '(show-paren-mode t))
 
@@ -180,6 +180,11 @@
 
 ;; enable smart scan mode
 (global-smartscan-mode 1)
+
+;; #############################################################################
+;; rebind M-s o to silver searcher
+;
+;; #############################################################################
 
 
 ;; #############################################################################
