@@ -2,13 +2,41 @@
 (require 'package)
 ;(add-to-list 'package-archives '("elpa" . "https://elpa.org/packages/") t)
 (add-to-list 'package-archives '("melpa-stable" . "https://stable.melpa.org/packages/") t)
-;(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
 
 (package-initialize)
 
 
+(when (not package-archive-contents)
+    (package-refresh-contents))
 
-;; theme/color settings
+(unless (package-installed-p 'use-package)
+  (package-install 'use-package))
+
+(require 'use-package)
+(setq use-package-always-ensure t)
+
+;; load custom load path, where custom files for Emacs will be placed
+(add-to-list 'load-path "~/.emacs.d/custom")
+
+;;##############################################################################
+
+
+(require 'setup-general)
+;(require 'setup-helm)
+;(require 'setup-helm-gtags)
+(require 'setup-ggtags)
+(require 'setup-cedet)
+(require 'setup-editing)
+
+
+
+
+;; function-args
+;; (require 'function-args)
+;; (fa-config-default)
+;; (define-key c-mode-map  [(tab)] 'company-complete)
+;; (define-key c++-mode-map  [(tab)] 'company-complete)
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
@@ -26,7 +54,8 @@
  '(display-time-mode t)
  '(fci-rule-color "#4C566A")
  '(global-linum-mode t)
- '(package-selected-packages '(ws-butler chess nordless-theme nord-theme jabber))
+ '(package-selected-packages
+   '(iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
  '(ps-font-size '(17 . 18.5))
  '(show-paren-mode t))
 
@@ -173,7 +202,3 @@
     (message "Aborting")))
 
 ;; #############################################################################
-
-
-;; load custom load path, where custom files for Emacs will be placed
-(add-to-list 'load-path "~/.emacs.d/custom/")
