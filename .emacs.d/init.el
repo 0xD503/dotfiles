@@ -7,6 +7,7 @@
 (package-initialize)
 
 
+
 ;; theme/color settings
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
@@ -99,7 +100,6 @@
 ;; global key bindings
 (global-set-key (kbd "M-i") 'ido-goto-symbol)
 
-
 ;; turn on IDO mode
 (ido-mode 1)
 (setq ido-enable-flex-matching t)
@@ -123,30 +123,56 @@
 ;; IDE settings
 
 ;; TAGS support
-(require 'etags)
-(defun ido-find-tag ()
-  "Find tag using ido"
-  (interactive)
-  (tags-completion-table)
-  (let (tag-names)
-    (mapc (lambda (x)
-            (unless (integerp x)
-              (push (prin1-to-string x t) tag-names)))
-          tags-completion-table)
-    (find-tag (ido-completing-read "Tag: " tag-names))))
+;; (require 'etags)
+;; (defun ido-find-tag ()
+;;   "Find a tag using ido"
+;;   (interactive)
+;;   (tags-completion-table)
+;;   (let (tag-names)
+;;     (mapc (lambda (x)
+;;             (unless (integerp x)
+;;               (push (prin1-to-string x t) tag-names)))
+;;           tags-completion-table)
+;;     (find-tag (ido-completing-read "Tag: " tag-names))))
 
-(defun ido-find-file-in-tag-files ()
-  (interactive)
-  (save-excursion
-    (let ((enable-recursive-minibuffers t))
-      (visit-tags-table-buffer))
-    (find-file
-     (expand-file-name
-      (ido-completing-read
-       "Project file: " (tags-table-files) nil t)))))
+;; (defun ido-find-file-in-tag-files ()
+;;   (interactive)
+;;   (save-excursion
+;;     (let ((enable-recursive-minibuffers t))
+;;       (visit-tags-table-buffer))
+;;     (find-file
+;;      (expand-file-name
+;;       (ido-completing-read
+;;        "Project file: " (tags-table-files) nil t)))))
 
-(global-set-key [remap find-tag] 'ido-find-tag)
-;(global-set-key (kbd "C-." 'ido-find-file-in-tag-files)
+
+;; (global-set-key [remap find-tag] 'ido-find-tag)
+;; (global-set-key (kbd "C-.") 'ido-find-file-in-tag-files)
+
+;; enable smart scan mode
+(global-smartscan-mode 1)
+
+
+;; #############################################################################
+
+;; setup "recent files" feature
+(require 'recentf)
+;; get rid of `find-file-read-only' and replace it with something
+;; more useful.
+(global-set-key (kbd "C-x C-r") 'ido-recentf-open)
+;; enable recent files mode.
+(recentf-mode t)
+; 50 files ought to be enough.
+(setq recentf-max-saved-items 50)
+
+(defun ido-recentf-open ()
+  "Use `ido-completing-read' to \\[find-file] a recent file"
+  (interactive)
+  (if (find-file (ido-completing-read "Find recent file: " recentf-list))
+      (message "Opening file...")
+    (message "Aborting")))
+
+;; #############################################################################
 
 
 ;; load custom load path, where custom files for Emacs will be placed
