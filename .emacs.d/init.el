@@ -149,7 +149,7 @@
  '(indent-tabs-mode nil)
  '(inhibit-startup-screen nil)
  '(package-selected-packages
-   '(company-c-headers sr-speedbar function-args fzf helm-ag ace-window avy helm-swoop helm-gtags helm iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
+   '(neotree company-c-headers sr-speedbar function-args fzf helm-ag ace-window avy helm-swoop helm-gtags helm iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
  '(ps-font-size '(17 . 18.5))
  '(show-paren-mode t)
  '(show-trailing-whitespace t)
