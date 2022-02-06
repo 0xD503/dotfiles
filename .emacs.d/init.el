@@ -19,17 +19,108 @@
 ;; load custom load path, where custom files for Emacs will be placed
 (add-to-list 'load-path "~/.emacs.d/custom")
 
-;;##############################################################################
+;; #############################################################################
 
 
 (require 'setup-general)
-;(require 'setup-helm)
+(require 'setup-helm)
 (require 'setup-helm-gtags)
 ;(require 'setup-ggtags)
+
 (require 'setup-cedet)
 (require 'setup-editing)
 
 
+
+;; #############################################################################
+
+(setq
+ helm-gtags-ignore-case t
+ helm-gtags-auto-update t
+ helm-gtags-use-input-at-cursor t
+ helm-gtags-pulse-at-cursor t
+ helm-gtags-prefix-key "\C-cg"
+ helm-gtags-suggested-key-mapping t
+ )
+
+(require 'helm-gtags)
+;; Enable helm-gtags-mode
+(add-hook 'dired-mode-hook 'helm-gtags-mode)
+(add-hook 'eshell-mode-hook 'helm-gtags-mode)
+(add-hook 'c-mode-hook 'helm-gtags-mode)
+(add-hook 'c++-mode-hook 'helm-gtags-mode)
+(add-hook 'asm-mode-hook 'helm-gtags-mode)
+
+(define-key helm-gtags-mode-map (kbd "C-c g a") 'helm-gtags-tags-in-this-function)
+(define-key helm-gtags-mode-map (kbd "C-j") 'helm-gtags-select)
+(define-key helm-gtags-mode-map (kbd "M-.") 'helm-gtags-dwim)
+(define-key helm-gtags-mode-map (kbd "M-,") 'helm-gtags-pop-stack)
+(define-key helm-gtags-mode-map (kbd "C-c <") 'helm-gtags-previous-history)
+(define-key helm-gtags-mode-map (kbd "C-c >") 'helm-gtags-next-history)
+
+
+;; #############################################################################
+
+
+;; #############################################################################
+
+;(require 'auto-complete)
+;(require 'auto-complete-config)
+;(ac-config-default)
+
+;(require 'yasnippet)
+;(yas-global-mode 1)
+
+;;; init C headers autocompletion in C/C++ mode
+;(defun my:ac-c-header-init()
+;  (require 'auto-complete-c-headers)
+;  (add-to-list 'ac-sources 'ac-source-c-headers)
+;  (add-to-list 'achead:include-directories "path/to/gcc/lib/dir"))
+;
+;(add-hook 'c-mode-hook 'my:ac-c-header-init)
+;(add-hook 'c++-mode-hook 'my:ac-c-header-init)
+
+
+;; restore menubar, etc...
+(defun restore-window-items()
+  (interactive)
+  (if (fboundp 'scroll-bar-mode) (scroll-bar-mode 1))
+  (if (fboundp 'menu-bar-mode) (menu-bar-mode 1)))
+
+(restore-window-items)
+
+
+;; key bindings
+(global-set-key (kbd "C-M-[") 'shrink-window-horizontally)
+(global-set-key (kbd "C-M-]") 'enlarge-window-horizontally)
+;(global-set-key (kbd "M-o") 'ace-window)
+(global-set-key (kbd "M-s o") 'helm-do-ag)
+
+;; CEDET
+(semantic-mode 1)
+
+;(setq speedbar-show-unknown-files t)
+
+;; #############################################################################
+
+
+;; #################################################
+(require 'company)
+
+(add-hook 'after-init-hook 'global-company-mode)
+(add-to-list 'company-backends 'company-c-headers)
+;; #################################################
+
+
+;; #######################################
+(require 'cc-mode)
+(require 'semantic)
+
+(global-semanticdb-minor-mode 1)
+(global-semantic-idle-scheduler-mode 1)
+
+(semantic-mode 1)
+;; #######################################
 
 
 ;; function-args
@@ -51,13 +142,18 @@
  '(custom-safe-themes
    '("0511293cecfff89edd24781b0c31b42ee8017ae3a53c292befd51ac94a63c031" "197cefea731181f7be51e9d498b29fb44b51be33484b17416b9855a2c4243cb1" default))
  '(display-battery-mode t)
+ '(display-line-numbers-type 'relative)
  '(display-time-mode t)
  '(fci-rule-color "#4C566A")
  '(global-linum-mode t)
+ '(indent-tabs-mode nil)
+ '(inhibit-startup-screen nil)
  '(package-selected-packages
-   '(helm-gtags iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
+   '(company-c-headers sr-speedbar function-args fzf helm-ag ace-window avy helm-swoop helm-gtags helm iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
  '(ps-font-size '(17 . 18.5))
- '(show-paren-mode t))
+ '(show-paren-mode t)
+ '(show-trailing-whitespace t)
+ '(tab-width 4))
 
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
@@ -70,55 +166,61 @@
 
 ;; custom functions
 
-;; supercharged ido version of imenu
-(defun ido-goto-symbol (&optional symbol-list)
-  "Refresh imenu and jump to a place in the buffer using Ido."
-  (interactive)
-  (unless (featurep 'imenu)
-    (require 'imenu nil t))
-  (cond
-   ((not symbol-list)
-    (let ((ido-mode ido-mode)
-          (ido-enable-flex-matching
-           (if (boundp 'ido-enable-flex-matching)
-               ido-enable-flex-matching t))
-          name-and-pos symbol-names position)
-      (unless ido-mode
-        (ido-mode 1)
-        (setq ido-enable-flex-matching t))
-      (while (progn
-               (imenu--cleanup)
-               (setq imenu--index-alist nil)
-               (ido-goto-symbol (imenu--make-index-alist))
-               (setq selected-symbol
-                     (ido-completing-read "Symbol? " symbol-names))
-               (string= (car imenu--rescan-item) selected-symbol)))
-      (unless (and (boundp 'mark-active) mark-active)
-        (push-mark nil t nil))
-      (setq position (cdr (assoc selected-symbol name-and-pos)))
-      (cond
-       ((overlayp position)
-        (goto-char (overlay-start position)))
-       (t
-        (goto-char position)))))
-   ((listp symbol-list)
-    (dolist (symbol symbol-list)
-      (let (name position)
-        (cond
-         ((and (listp symbol) (imenu--subalist-p symbol))
-          (ido-goto-symbol symbol))
-         ((listp symbol)
-          (setq name (car symbol))
-          (setq position (cdr symbol)))
-         ((stringp symbol)
-          (setq name symbol)
-          (setq position
-                (get-text-property 1 'org-imenu-marker symbol))))
-        (unless (or (null position) (null name)
-                    (string= (car imenu--rescan-item) name))
-          (add-to-list 'symbol-names name)
-          (add-to-list 'name-and-pos (cons name position))))))))
+;; ;; supercharged ido version of imenu
+;; (defun ido-goto-symbol (&optional symbol-list)
+;;   "Refresh imenu and jump to a place in the buffer using Ido."
+;;   (interactive)
+;;   (unless (featurep 'imenu)
+;;     (require 'imenu nil t))
+;;   (cond
+;;    ((not symbol-list)
+;;     (let ((ido-mode ido-mode)
+;;           (ido-enable-flex-matching
+;;            (if (boundp 'ido-enable-flex-matching)
+;;                ido-enable-flex-matching t))
+;;           name-and-pos symbol-names position)
+;;       (unless ido-mode
+;;         (ido-mode 1)
+;;         (setq ido-enable-flex-matching t))
+;;       (while (progn
+;;                (imenu--cleanup)
+;;                (setq imenu--index-alist nil)
+;;                (ido-goto-symbol (imenu--make-index-alist))
+;;                (setq selected-symbol
+;;                      (ido-completing-read "Symbol? " symbol-names))
+;;                (string= (car imenu--rescan-item) selected-symbol)))
+;;       (unless (and (boundp 'mark-active) mark-active)
+;;         (push-mark nil t nil))
+;;       (setq position (cdr (assoc selected-symbol name-and-pos)))
+;;       (cond
+;;        ((overlayp position)
+;;         (goto-char (overlay-start position)))
+;;        (t
+;;         (goto-char position)))))
+;;    ((listp symbol-list)
+;;     (dolist (symbol symbol-list)
+;;       (let (name position)
+;;         (cond
+;;          ((and (listp symbol) (imenu--subalist-p symbol))
+;;           (ido-goto-symbol symbol))
+;;          ((listp symbol)
+;;           (setq name (car symbol))
+;;           (setq position (cdr symbol)))
+;;          ((stringp symbol)
+;;           (setq name symbol)
+;;           (setq position
+;;                 (get-text-property 1 'org-imenu-marker symbol))))
+;;         (unless (or (null position) (null name)
+;;                     (string= (car imenu--rescan-item) name))
+;;           (add-to-list 'symbol-names name)
+;;           (add-to-list 'name-and-pos (cons name position))))))))
 
+;; (global-set-key (kbd "M-i") 'ido-goto-symbol)
+
+;; ;; turn on IDO mode
+;; (ido-mode 1)
+;; (setq ido-enable-flex-matching t)
+;; (setq ido-everywhere t)
 
 
 ;; advanced command bindings
@@ -126,24 +228,18 @@
 (put 'downcase-region 'disabled nil)
 
 
-;; global key bindings
-(global-set-key (kbd "M-i") 'ido-goto-symbol)
-
-;; turn on IDO mode
-(ido-mode 1)
-(setq ido-enable-flex-matching t)
-(setq ido-everywhere t)
-
 ;; tabs/spaces/indentation settings
-(setq-default indent-tabs-mode nil)
-(setq-default tab-width 4)
+;(setq-default indent-tabs-mode nil)
 (defvaralias 'c-default-offset 'tab-width)
 (defvaralias 'cperl-indent-level 'tab-width)
-(setq-default show-trailing-whitespace t)
+;(setq-default show-trailing-whitespace t)
 ;; trim whitespaces
 (add-hook 'before-save-hook 'delete-trailing-whitespace)
 ;; 80-column ruller
-(add-hook 'prog-mode-hook #'display-fill-column-indicator-mode)
+(defun set-column-ruller ()
+  (display-fill-column-indicator-mode)
+  (set-fill-column 80))
+(add-hook 'prog-mode-hook #'set-column-ruller)
 
 ;; enable auto-indentation globally
 (define-key global-map (kbd "RET") 'newline-and-indent)
@@ -151,39 +247,11 @@
 
 ;; IDE settings
 
-;; TAGS support
-;; (require 'etags)
-;; (defun ido-find-tag ()
-;;   "Find a tag using ido"
-;;   (interactive)
-;;   (tags-completion-table)
-;;   (let (tag-names)
-;;     (mapc (lambda (x)
-;;             (unless (integerp x)
-;;               (push (prin1-to-string x t) tag-names)))
-;;           tags-completion-table)
-;;     (find-tag (ido-completing-read "Tag: " tag-names))))
-
-;; (defun ido-find-file-in-tag-files ()
-;;   (interactive)
-;;   (save-excursion
-;;     (let ((enable-recursive-minibuffers t))
-;;       (visit-tags-table-buffer))
-;;     (find-file
-;;      (expand-file-name
-;;       (ido-completing-read
-;;        "Project file: " (tags-table-files) nil t)))))
-
-
-;; (global-set-key [remap find-tag] 'ido-find-tag)
-;; (global-set-key (kbd "C-.") 'ido-find-file-in-tag-files)
-
 ;; enable smart scan mode
 (global-smartscan-mode 1)
 
 ;; #############################################################################
-;; rebind M-s o to silver searcher
-;
+
 ;; #############################################################################
 
 
