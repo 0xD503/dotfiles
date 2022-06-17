@@ -1,6 +1,6 @@
 ;; package system settings
 (require 'package)
-;(add-to-list 'package-archives '("elpa" . "https://elpa.org/packages/") t)
+(add-to-list 'package-archives '("elpa" . "https://elpa.org/packages/") t)
 (add-to-list 'package-archives '("melpa-stable" . "https://stable.melpa.org/packages/") t)
 (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
 
@@ -64,13 +64,6 @@
 
 ;; #############################################################################
 
-;(require 'auto-complete)
-;(require 'auto-complete-config)
-;(ac-config-default)
-
-;(require 'yasnippet)
-;(yas-global-mode 1)
-
 ;;; init C headers autocompletion in C/C++ mode
 ;(defun my:ac-c-header-init()
 ;  (require 'auto-complete-c-headers)
@@ -91,6 +84,7 @@
 
 
 ;; key bindings
+(require 'helm-ag)
 (global-set-key (kbd "C-M-[") 'shrink-window-horizontally)
 (global-set-key (kbd "C-M-]") 'enlarge-window-horizontally)
 ;(global-set-key (kbd "M-o") 'ace-window)
@@ -137,6 +131,8 @@
    [default default default italic underline success warning error])
  '(ansi-color-names-vector
    ["#242424" "#e5786d" "#95e454" "#cae682" "#8ac6f2" "#333366" "#ccaa8f" "#f6f3e8"])
+ '(bitbake-build-directory "/home/ruslan/Projects/poky-rpi/rpi-build")
+ '(bitbake-poky-directory "/home/ruslan/Projects/poky-rpi")
  '(column-number-mode t)
  '(custom-enabled-themes '(wheatgrass))
  '(custom-safe-themes
@@ -149,7 +145,7 @@
  '(indent-tabs-mode nil)
  '(inhibit-startup-screen nil)
  '(package-selected-packages
-   '(company-c-headers sr-speedbar function-args fzf helm-ag ace-window avy helm-swoop helm-gtags helm iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
+   '(bitbake telega treemacs xclip company-c-headers sr-speedbar function-args fzf helm-ag ace-window avy helm-swoop helm-gtags helm iedit anzu comment-dwim-2 dtrt-indent clean-aindent-mode yasnippet undo-tree volatile-highlights ggtags zygospore projectile company use-package ws-butler chess nordless-theme nord-theme jabber))
  '(ps-font-size '(17 . 18.5))
  '(show-paren-mode t)
  '(show-trailing-whitespace t)
@@ -248,6 +244,7 @@
 ;; IDE settings
 
 ;; enable smart scan mode
+(require 'smartscan)
 (global-smartscan-mode 1)
 
 ;; #############################################################################
