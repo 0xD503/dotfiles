@@ -11,6 +11,6 @@
 	rb = rebase
 [user]
 	name = Ruslan Vostretsov
-	email = Rus1995_95@mail.ru
+	email = ElectricalBrain@protonmail.com
 [core]
 	editor = emacs -nw
