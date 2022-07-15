@@ -11,6 +11,7 @@
 	rb = rebase
 	dfc = diff --cached
 	adu = add -u
+	cfd = clean -fd
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
