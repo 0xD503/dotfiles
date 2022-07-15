@@ -9,6 +9,8 @@
 	lg = log --oneline --graph
 	mg = merge
 	rb = rebase
+	dfc = diff --cached
+	adu = add -u
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
