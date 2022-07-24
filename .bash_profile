@@ -1,1 +1,4 @@
-. .profile
+#!/bin/env bash
+
+
+. $HOME/.profile
