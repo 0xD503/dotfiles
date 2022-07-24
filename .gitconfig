@@ -12,6 +12,10 @@
 	dfc = diff --cached
 	adu = add -u
 	cfd = clean -fd
+	rs = restore
+	rss = restore --staged
+	adi = add -i
+	cim = commit -m
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
