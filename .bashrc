@@ -8,7 +8,6 @@
 # If not running interactively, don't do anything
 [[ $- != *i* ]] && return
 
-#alias ls='ls --color=auto'
 PS1='[\u@\h \W]\$ '
 
 
@@ -51,19 +50,13 @@ else
 fi
 unset color_prompt force_color_prompt
 
-
-# Alias definitions.
-# You may want to put all your additions into a separate file like
-# ~/.bash_aliases, instead of adding them here directly.
-# See /usr/share/doc/bash-doc/examples in the bash-doc package.
-if [ -f ~/.bash_aliases ]; then
-    . ~/.bash_aliases
-fi
-
-# profile
-if [ -f ~/.bash_profile ]; then
-    . ~/.bash_profile
-fi
+# # Alias definitions.
+# # You may want to put all your additions into a separate file like
+# # ~/.bash_aliases, instead of adding them here directly.
+# # See /usr/share/doc/bash-doc/examples in the bash-doc package.
+# if [ -f ~/.bash_aliases ]; then
+#     . ~/.bash_aliases
+# fi
 
 # enable programmable completion features (you don't need to enable
 # this, if it's already enabled in /etc/bash.bashrc and /etc/profile
@@ -74,4 +67,9 @@ if ! shopt -oq posix; then
   elif [ -f /etc/bash_completion ]; then
     . /etc/bash_completion
   fi
+fi
+
+# include .profile if it exists
+if [ -f "$HOME/.my_profile" ]; then
+    . "$HOME/.my_profile"
 fi

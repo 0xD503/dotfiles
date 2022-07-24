@@ -1,7 +1,7 @@
 #!/bin/env bash
 
 
-dot_files=(".profile" ".bashrc" ".aliases" ".bash_profile" ".bash_aliases" ".gitconfig" ".selected_editor" ".tmux.conf.local")
+dot_files=(".profile" ".my_profile" ".bashrc" ".aliases" ".gitconfig" ".selected_editor" ".tmux.conf.local")
 dot_dirs=(".emacs.d/")
 
 
