@@ -1,7 +1,7 @@
 #!/bin/env bash
 
 
-dot_files=(".profile" ".aliases" ".bash_profile" ".bash_aliases" ".emacs.d/" ".gitconfig" ".selected_editor" ".tmux.conf.local")
+dot_files=(".profile" ".bashrc" ".aliases" ".bash_profile" ".bash_aliases" ".emacs.d/" ".gitconfig" ".selected_editor" ".tmux.conf.local")
 
 
 ## create sym link to connect dot files
