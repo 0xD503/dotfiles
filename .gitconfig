@@ -16,6 +16,8 @@
 	rss = restore --staged
 	adi = add -i
 	cim = commit -m
+	cl = clone
+	ciam = commit -am
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
