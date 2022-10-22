@@ -19,6 +19,7 @@
 	cl = clone
 	ciam = commit -am
 	rmc = rm --cached
+	sw = switch
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
