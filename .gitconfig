@@ -25,3 +25,5 @@
 	email = ElectricalBrain@protonmail.com
 [core]
 	editor = emacs -nw
+[init]
+	defaultBranch = master
