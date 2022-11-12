@@ -3,7 +3,7 @@
 	co = checkout
 	ci = commit
 	br = branch
-	upload = push --all
+	unload = push --all
 	stu = status -uno
 	df = diff
 	lg = log --oneline --graph
