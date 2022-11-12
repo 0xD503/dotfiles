@@ -17,20 +17,20 @@ function usage() {
 function update_repo() {
     echo "Updating repo..."
     for dotfile in "${dot_files[@]}"; do
-	    cp "$HOME/$dotfile" "./$dotfile"
+	    cp "$HOME/$dotfile" "./"
     done
     for dotdir in "${dot_dirs[@]}"; do
-	    cp -r "$HOME/$dotdir" "./$dotdir"
+	    cp -r "$HOME/$dotdir" "./"
     done
 }
 
 function update_user() {
     echo "Updating user files..."
     for dotfile in "${dot_files[@]}"; do
-	    cp "./$dotfile" "$HOME/$dotfile"
+	    cp "./$dotfile" "$HOME/"
     done
     for dotdir in "${dot_dirs[@]}"; do
-        cp -r "./$dotdir" "$HOME/$dotdir"
+        cp -r "./$dotdir" "$HOME/"
     done
 }
 
