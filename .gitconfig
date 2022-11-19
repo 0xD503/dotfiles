@@ -20,6 +20,7 @@
 	ciam = commit -am
 	rmc = rm --cached
 	sw = switch
+	unstash = stash pop
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
