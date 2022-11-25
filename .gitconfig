@@ -21,6 +21,8 @@
 	rmc = rm --cached
 	sw = switch
 	unstash = stash pop
+	cia = commit -a
+	ciaa = commit -a --amend
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
