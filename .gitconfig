@@ -23,6 +23,7 @@
 	unstash = stash pop
 	cia = commit -a
 	ciaa = commit -a --amend
+	ptags = push --tags
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
