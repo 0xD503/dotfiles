@@ -24,6 +24,7 @@
 	cia = commit -a
 	ciaa = commit -a --amend
 	ptags = push --tags
+	unstage = rm --cached
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
