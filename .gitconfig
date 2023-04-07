@@ -9,6 +9,7 @@
 	lg = log --oneline --graph
 	mg = merge
 	rb = rebase
+	rbc = rebase --continue
 	dfc = diff --cached
 	adu = add -u
 	cfd = clean -fd
@@ -25,6 +26,14 @@
 	ciaa = commit -a --amend
 	ptags = push --tags
 	unstage = restore --staged
+	cid = commit --amend
+	sm = submodule
+	smu = submodule update
+	psm = pull --recurse-submodules
+	pasm = pull --all --recurse-submodules
+	fasm = fetch --all --recurse-submodules
+	rst = reset
+	rsts = reset --s
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
