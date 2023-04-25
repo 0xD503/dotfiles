@@ -32,7 +32,7 @@
 ;; There are two ways to load a theme. Both assume the theme is installed and
 ;; available. You can either set `doom-theme' or manually load a theme with the
 ;; `load-theme' function. This is the default:
-(setq doom-theme 'doom-one)
+(setq doom-theme 'doom-nord)
 
 ;; This determines the style of line numbers in effect. If set to `nil', line
 ;; numbers are disabled. For relative line numbers, set this to `relative'.
@@ -51,7 +51,7 @@
 
 
 ;; Keybindings
-(global-set-key (kbd "M-g a") #'helm-do-ag)
+(global-set-key (kbd "M-g a") #'helm-rg)
 (global-set-key (kbd "M-{") #'shrink-window-horizontally)
 (global-set-key (kbd "M-}") #'enlarge-window-horizontally)
 (global-set-key (kbd "C-c C-c") #'comment-region)
