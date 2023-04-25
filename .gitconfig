@@ -33,7 +33,8 @@
 	pasm = pull --all --recurse-submodules
 	fasm = fetch --all --recurse-submodules
 	rst = reset
-	rsts = reset --s
+	rsts = reset --soft
+	rstm = reset --mixed
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
