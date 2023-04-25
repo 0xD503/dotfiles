@@ -57,6 +57,9 @@
 (global-set-key (kbd "C-c C-c") #'comment-region)
 
 
+;; Other settings
+(global-smartscan-mode t)
+
 ;; IRC config
 (set-irc-server! "irc.libera.chat"
  `(:tls t
