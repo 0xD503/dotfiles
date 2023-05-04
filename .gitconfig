@@ -35,6 +35,11 @@
 	rst = reset
 	rsts = reset --soft
 	rstm = reset --mixed
+	sts = stash
+	stsl = stash list
+	rbom = rb origin/master
+	cxf = clean -Xf
+	a = add
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com

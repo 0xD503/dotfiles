@@ -49,6 +49,9 @@
 ;; Quiting emacs confirmation
 (setq confirm-kill-emacs nil)
 
+;; Treemacs settings and theme
+(setq doom-themes-treemacs-theme "doom-colors")
+
 
 ;; Keybindings
 (global-set-key (kbd "M-g a") #'helm-rg)
