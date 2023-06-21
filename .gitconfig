@@ -44,6 +44,6 @@
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
 [core]
-	editor = emacs -nw
+	editor = emacs -nw -q
 [init]
 	defaultBranch = master
