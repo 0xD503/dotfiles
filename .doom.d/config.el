@@ -55,6 +55,7 @@
 
 ;; Keybindings
 (global-set-key (kbd "M-g a") #'helm-rg)
+;(global-set-key (kbd "M-g a") #'helm-do-ag)
 (global-set-key (kbd "M-{") #'shrink-window-horizontally)
 (global-set-key (kbd "M-}") #'enlarge-window-horizontally)
 (global-set-key (kbd "C-c C-c") #'comment-region)

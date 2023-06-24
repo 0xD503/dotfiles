@@ -40,6 +40,8 @@
 	rbom = rb origin/master
 	cxf = clean -Xf
 	a = add
+	d = diff
+	s = status
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
