@@ -3,7 +3,7 @@
 	co = checkout
 	ci = commit
 	br = branch
-	unload = push --all
+	unload = push --all origin
 	stu = status -uno
 	df = diff
 	lg = log --oneline --graph
@@ -49,6 +49,7 @@
 	d = diff
 	cn = clone
 	cns = clone --recurse-submodules
+	h = help
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
