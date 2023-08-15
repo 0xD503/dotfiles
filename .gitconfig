@@ -50,6 +50,13 @@
 	cn = clone
 	cns = clone --recurse-submodules
 	h = help
+	swc = switch -c
+	ciad = commit -a --amend
+	cls = clone --recurse-submodules
+	cfg = config --global
+	sh = show
+	swm = switch master
+	psho = push origin
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
