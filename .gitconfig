@@ -59,8 +59,10 @@
 	psho = push origin
 	rv = revert
 	rvc = revert --continue
-	#history = log --follow -p --
-	history = whatchanged -p
+	history = log --follow -p --
+	v = version
+	smur = submodule update --init --recursive
+	smui = submodule update --init
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
