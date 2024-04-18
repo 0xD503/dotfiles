@@ -63,6 +63,17 @@
 	v = version
 	smur = submodule update --init --recursive
 	smui = submodule update --init
+	rsth = rst HEAD~
+	rbab = rebase --abort
+	cln = clean
+	clnfdxyy = clean -f -d -x
+	rvsh = remote -v show
+	clnfdx = clean -f -d -x -n
+	rbi = rebase --interactive
+	rt = remote
+	rtv = remote -v show
+	lp = log -p
+	cpab = cherry-pick --abort
 [user]
 	name = Ruslan Vostretsov
 	email = ElectricalBrain@protonmail.com
