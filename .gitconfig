@@ -76,7 +76,7 @@
 	cpab = cherry-pick --abort
 [user]
 	name = Ruslan Vostretsov
-	email = ElectricalBrain@protonmail.com
+	email = rus1995_95@mail.ru
 [core]
 	editor = emacs -nw -q
 [init]
