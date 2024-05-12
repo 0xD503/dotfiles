@@ -74,6 +74,9 @@
 	rtv = remote -v show
 	lp = log -p
 	cpab = cherry-pick --abort
+	fsm = fetch --recurse-submodules
+	smuir = submodule update --init --recursive
+	cidne = commit --amend --no-edit
 [user]
 	name = Ruslan Vostretsov
 	email = rus1995_95@mail.ru
