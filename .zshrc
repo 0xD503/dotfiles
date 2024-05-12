@@ -106,3 +106,7 @@ fi
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias emacs="emacs -nw"
+
+
+## Personal exports
+export PYTHONUSERBASE=$HOME/.local/python3
