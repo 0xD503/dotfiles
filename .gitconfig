@@ -45,7 +45,7 @@
 	cie = commit --allow-empty
 	s = status
 	l = log
-	b = branch
+	b = branch -v
 	d = diff
 	cn = clone
 	cns = clone --recurse-submodules
@@ -77,6 +77,12 @@
 	fsm = fetch --recurse-submodules
 	smuir = submodule update --init --recursive
 	cidne = commit --amend --no-edit
+	wt = worktree
+	wta = worktree add
+	wtl = worktree list -v
+	cnb = clone --branch
+	cnsb = clone --recurse-submodules --branch
+	cnssb = clone --recurse-submodules --single-branch --branch
 [user]
 	name = Ruslan Vostretsov
 	email = rus1995_95@mail.ru
