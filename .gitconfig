@@ -83,6 +83,8 @@
 	cnb = clone --branch
 	cnsb = clone --recurse-submodules --branch
 	cnssb = clone --recurse-submodules --single-branch --branch
+	fash = fetch --unshallow
+	fdp = fetch --deepen
 [user]
 	name = Ruslan Vostretsov
 	email = rus1995_95@mail.ru
