@@ -86,6 +86,9 @@
 	fash = fetch --unshallow
 	fdp = fetch --deepen
 	ciadne = commit -a --amend --no-edit
+	sl = shortlog
+	sls = shortlog -sne
+	rssa = restore --staged .
 [user]
 	name = Ruslan Vostretsov
 	email = rus1995_95@mail.ru
