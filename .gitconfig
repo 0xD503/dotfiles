@@ -89,6 +89,9 @@
 	sl = shortlog
 	sls = shortlog -sne
 	rssa = restore --staged .
+	prb = pull --rebase
+	pbo = pull --rebase origin
+	pbom = pull --rebase origin master
 [user]
 	name = Ruslan Vostretsov
 	email = rus1995_95@mail.ru
