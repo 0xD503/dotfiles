@@ -92,6 +92,7 @@
 	prb = pull --rebase
 	pbo = pull --rebase origin
 	pbom = pull --rebase origin master
+	clnall = "!git clean -ffdx; git submodule foreach --recursive \"git clean -ffdx\""
 [user]
 	name = Ruslan Vostretsov
 	email = rus1995_95@mail.ru
