@@ -95,7 +95,7 @@
 	clnall = "!git clean -ffdx; git submodule foreach --recursive \"git clean -ffdx\""
 [user]
 	name = Ruslan Vostretsov
-	email = rus1995_95@mail.ru
+	email = antanta.twwk@gmail.com
 [core]
 	editor = emacs -nw -q
 [init]
