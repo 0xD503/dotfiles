@@ -337,12 +337,18 @@ set -g history-limit 10000
 #set -g status-keys vi
 #set -g mode-keys vi
 
-# replace C-b by C-a instead of using both prefixes
-set -gu prefix2
+## Old style bindings
+#set -gu prefix2
+#set -g prefix C-[
+#bind C-[ send-prefix
+
+## New style bindings
 unbind C-a
 unbind C-b
-set -g prefix C-[
-bind C-[ send-prefix
+set -g prefix Escape
+set -g prefix2 C-0
+bind Escape send-prefix
+#bind C-0 send-prefix
 
 # move status line to top
 #set -g status-position top
