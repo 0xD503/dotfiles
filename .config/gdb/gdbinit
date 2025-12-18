@@ -1,5 +1,7 @@
 set history save on
 set history size 1000
 
-# Fedora
+set pagination off
+
+## Fedora
 set debuginfod enabled on
