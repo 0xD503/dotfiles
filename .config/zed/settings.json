@@ -1,0 +1,50 @@
+// Zed settings
+//
+// For information on how to configure Zed, see the Zed
+// documentation: https://zed.dev/docs/configuring-zed
+//
+// To see all of Zed's default settings without changing your
+// custom settings, run `zed: open default settings` from the
+// command palette (cmd-shift-p / ctrl-shift-p)
+{
+  /* Duplicated key auto-commented: "agent": {
+    "default_model": {
+      "provider": "ollama",
+      "model": "llama3.2:latest"
+    },
+    "model_parameters": []
+  }, */
+  "disable_ai": false,
+  "toolbar": {
+    "code_actions": true,
+  },
+  "minimap": {
+    "display_in": "active_editor",
+    "show": "auto",
+  },
+  "edit_predictions": {
+    "provider": "none",
+  },
+  "base_keymap": "VSCode",
+  "agent": {
+    "default_model": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:14b",
+    },
+  },
+  // "base_keymap": "Emacs",
+  "vim_mode": false,
+  "telemetry": {
+    "metrics": false,
+    "diagnostics": false,
+  },
+  "ui_font_size": 16,
+  "buffer_font_size": 16,
+  "theme": {
+    "mode": "system",
+    "light": "One Light",
+    "dark": "One Dark",
+  },
+  "soft_wrap": "preferred_line_length",
+  "preferred_line_length": 80,
+}
