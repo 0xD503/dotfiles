@@ -7,7 +7,7 @@
 ;; Some functionality uses this to identify you, e.g. GPG configuration, email
 ;; clients, file templates and snippets. It is optional.
 (setq user-full-name "Ruslan Vostretsov"
-      user-mail-address "ElectricalBrain@protonmail.com")
+      user-mail-address "antanta.twwk@gmail.com")
 
 ;; Doom exposes five (optional) variables for controlling fonts in Doom:
 ;;
@@ -15,7 +15,7 @@
 ;; - `doom-variable-pitch-font' -- a non-monospace font (where applicable)
 ;; - `doom-big-font' -- used for `doom-big-font-mode'; use this for
 ;;   presentations or streaming.
-;; - `doom-unicode-font' -- for unicode glyphs
+;; - `doom-symbol-font' -- for symbols
 ;; - `doom-serif-font' -- for the `fixed-pitch-serif' face
 ;;
 ;; See 'C-h v doom-font' for documentation and more examples of what they
@@ -46,7 +46,7 @@
 ;; change `org-directory'. It must be set before org loads!
 (setq org-directory "~/Documents/org/")
 
-;; Quiting emacs confirmation
+;; Disable Emacs quiting confirmation
 (setq confirm-kill-emacs nil)
 
 ;; Treemacs settings and theme
@@ -63,11 +63,12 @@
 ;; Other settings
 (global-smartscan-mode t)
 
+
 ;; IRC config
 (set-irc-server! "irc.libera.chat"
  `(:tls t
    :port 6697
-;   :nick "rus"
+;   :nick "ruslan"
 ;   :sasl-username ,(+pass-get-user "irc/libera.chat")
 ;   :sasl-password (lambda (&rest _) (+pass-get-secret "irc/libera.chat"))
 ;   :sasl-password ,(+pass-get-secret "irc/libera.chat")
@@ -81,23 +82,22 @@
 
 
 ;; Whenever you reconfigure a package, make sure to wrap your config in an
-;; `after!' block, otherwise Doom's defaults may override your settings. E.g.
+;; `with-eval-after-load' block, otherwise Doom's defaults may override your
+;; settings. E.g.
 ;;
-;;   (after! PACKAGE
+;;   (with-eval-after-load 'PACKAGE
 ;;     (setq x y))
 ;;
 ;; The exceptions to this rule:
 ;;
 ;;   - Setting file/directory variables (like `org-directory')
 ;;   - Setting variables which explicitly tell you to set them before their
-;;     package is loaded (see 'C-h v VARIABLE' to look up their documentation).
+;;     package is loaded (see 'C-h v VARIABLE' to look them up).
 ;;   - Setting doom variables (which start with 'doom-' or '+').
 ;;
 ;; Here are some additional functions/macros that will help you configure Doom.
 ;;
 ;; - `load!' for loading external *.el files relative to this one
-;; - `use-package!' for configuring packages
-;; - `after!' for running code after a package has loaded
 ;; - `add-load-path!' for adding directories to the `load-path', relative to
 ;;   this file. Emacs searches the `load-path' when you load packages with
 ;;   `require' or `use-package'.
