@@ -14,12 +14,42 @@
     },
     "model_parameters": []
   }, */
+  "active_pane_modifiers": {
+    "inactive_opacity": 0.7
+  },
+  "format_on_save": "on",
+  "indent_guides": {
+    "background_coloring": "disabled",
+    "coloring": "indent_aware",
+    "enabled": true,
+  },
+  "terminal": {
+    "font_size": 16.0,
+    "font_family": ".ZedMono",
+    "scrollbar": {
+      "show": "auto",
+    },
+  },
+  "show_whitespaces": "trailing",
+  "hide_mouse": "on_typing_and_movement",
+  "cursor_shape": "bar",
+  "cursor_blink": true,
+  "current_line_highlight": "all",
+  "project_panel": {
+    "dock": "left",
+  },
+  "git_panel": {
+    "dock": "left",
+    "tree_view": false,
+  },
+  "colorize_brackets": true,
   "disable_ai": false,
   "toolbar": {
+    "breadcrumbs": true,
     "code_actions": true,
   },
   "minimap": {
-    "display_in": "active_editor",
+    "display_in": "all_editors",
     "show": "auto",
   },
   "edit_predictions": {
@@ -27,6 +57,8 @@
   },
   "base_keymap": "VSCode",
   "agent": {
+    "dock": "right",
+    "sidebar_side": "right",
     "default_model": {
       "provider": "ollama",
       "model": "qwen2.5-coder:14b",
@@ -40,11 +72,14 @@
   },
   "ui_font_size": 16,
   "buffer_font_size": 16,
+  "buffer_font_features": {
+    "liga": true,
+  },
   "theme": {
     "mode": "system",
     "light": "One Light",
     "dark": "One Dark",
   },
-  "soft_wrap": "preferred_line_length",
+  "soft_wrap": "prefer_line",
   "preferred_line_length": 80,
 }
