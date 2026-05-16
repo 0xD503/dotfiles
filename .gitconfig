@@ -59,7 +59,7 @@
 	psho = push origin
 	rv = revert
 	rvc = revert --continue
-	history = log --follow -p --
+	hist = log --follow -p --
 	v = version
 	smur = submodule update --init --recursive
 	smui = submodule update --init
@@ -93,6 +93,14 @@
 	pbo = pull --rebase origin
 	pbom = pull --rebase origin master
 	clnall = "!git clean -ffdx; git submodule foreach --recursive \"git clean -ffdx\""
+	speedup = !git gc --aggressive --prune=now && git repack -Ad && git update-index --refresh
+        pshuo = push -u origin
+        plo = pull origin
+        rbet = rebase --edit-todo
+        fo = fetch origin
+        bl = blame
+        wtp = worktree prune
+	pshoa = push origin --all
 [user]
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
