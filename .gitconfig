@@ -101,6 +101,7 @@
         bl = blame
         wtp = worktree prune
 	pshoa = push origin --all
+	dh = diff HEAD
 [user]
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
