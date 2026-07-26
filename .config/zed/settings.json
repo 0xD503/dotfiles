@@ -14,6 +14,25 @@
     },
     "model_parameters": []
   }, */
+  "tab_bar": {
+    "show_pinned_tabs_in_separate_row": false
+  },
+  "tabs": {
+    "show_diagnostics": "off",
+    "file_icons": true,
+    "git_status": true
+  },
+  "agent_servers": {
+    "claude-acp": {
+      "type": "registry"
+    }
+  },
+  "title_bar": {
+    "show_branch_status_icon": true
+  },
+  "status_bar": {
+    "line_endings_button": true
+  },
   "active_pane_modifiers": {
     "inactive_opacity": 0.7
   },
@@ -31,7 +50,7 @@
     },
   },
   "show_whitespaces": "trailing",
-  "hide_mouse": "on_typing_and_movement",
+  "hide_mouse": "on_typing_and_action",
   "cursor_shape": "bar",
   "cursor_blink": true,
   "current_line_highlight": "all",

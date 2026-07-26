@@ -93,15 +93,21 @@
 	pbo = pull --rebase origin
 	pbom = pull --rebase origin master
 	clnall = "!git clean -ffdx; git submodule foreach --recursive \"git clean -ffdx\""
-	speedup = !git gc --aggressive --prune=now && git repack -Ad && git update-index --refresh
-        pshuo = push -u origin
-        plo = pull origin
-        rbet = rebase --edit-todo
-        fo = fetch origin
-        bl = blame
-        wtp = worktree prune
-	pshoa = push origin --all
+	speedup = !git reflog expire --expire=now --all && git pack-refs --all --prune && git gc --prune=now && git commit-graph write --reachable --changed-paths && git update-index --refresh
+	pshuo = push -u origin
+	plo = pull origin
+	rbet = rebase --edit-todo
+	fo = fetch origin
+	bl = blame
+	wtp = worktree prune
 	dh = diff HEAD
+	stshp = stash show -p
+	speedup-deep = !git reflog expire --expire=now --all && git gc --aggressive --prune=now && git commit-graph write --reachable --changed-paths
+	aliases = config --get-regexp '^alias\\.'
+	undo = reset --soft HEAD~1
+	rvab = revert --abort
+	fa = fetch --all
+	pshoa = push origin --all
 [user]
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
