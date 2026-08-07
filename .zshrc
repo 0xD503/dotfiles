@@ -49,7 +49,8 @@ if [ -f "$HOME/.aliases" ]; then
     . "$HOME/.aliases"
 fi
 
-# Machine-local overrides, never tracked in the dotfiles repo.
+# Machine-local overrides. The repo keeps an empty stub, but update.sh never
+# deploys or collects it, so what you put here stays on this machine.
 if [ -f "$HOME/.zshrc.local" ]; then
     . "$HOME/.zshrc.local"
 fi

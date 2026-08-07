@@ -96,7 +96,19 @@ if [ -f "$HOME/.aliases" ]; then
     . "$HOME/.aliases"
 fi
 
-# Machine-local overrides, never tracked in the dotfiles repo.
+# --- drop-ins ---------------------------------------------------------------
+# Fedora's stock ~/.bashrc sources every file in ~/.bashrc.d/, and snippets get
+# dropped there by hand and by some packages. Honouring it keeps those working;
+# the loop is inert on distributions that have no such directory.
+if [ -d "$HOME/.bashrc.d" ]; then
+    for _brc_rc in "$HOME"/.bashrc.d/*; do
+        [ -r "$_brc_rc" ] && . "$_brc_rc"
+    done
+    unset _brc_rc
+fi
+
+# Machine-local overrides. The repo keeps an empty stub, but update.sh never
+# deploys or collects it, so what you put here stays on this machine.
 if [ -f "$HOME/.bashrc.local" ]; then
     . "$HOME/.bashrc.local"
 fi
