@@ -8,7 +8,9 @@
 # Nothing here may assume GNU userland; guard anything that is not in POSIX.
 
 # GNU coreutils understands --color; BSD/macOS ls does not.
-if ls --color=auto . >/dev/null 2>&1; then
+# Probe against /dev/null, never against the working directory: this runs at
+# every interactive startup, and listing an NFS or sshfs cwd would stall it.
+if ls --color=auto /dev/null >/dev/null 2>&1; then
     alias ls='ls --color=auto'
     alias dir='dir --color=auto'
     alias vdir='vdir --color=auto'

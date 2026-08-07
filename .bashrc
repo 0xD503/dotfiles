@@ -22,6 +22,25 @@ case $- in
     *) return ;;
 esac
 
+# --- system-wide interactive rc --------------------------------------------
+# Debian, Arch and Gentoo build bash to read their system file automatically
+# (/etc/bash.bashrc, /etc/bash/bashrc). Fedora and RHEL do not: their stock
+# ~/.bashrc sources /etc/bashrc by hand, and that file is what runs
+# /etc/profile.d/*.sh for non-login shells. Dropping it there would cost the
+# prompt, vte integration and every profile.d PATH addition. Only the
+# Fedora/RHEL family ships this path, so it fires exactly where it is needed,
+# and their /etc/bashrc guards itself against being sourced twice.
+if [ -r /etc/bashrc ]; then
+    . /etc/bashrc
+fi
+
+# /etc/bashrc sets umask (002 or 022) for interactive shells, which would
+# override ours. Re-applying the environment layer restores it -- the file is
+# idempotent by contract, and .zshrc does the same for /etc/zprofile.
+if [ -f "$HOME/.my_profile" ]; then
+    . "$HOME/.my_profile"
+fi
+
 # --- history ----------------------------------------------------------------
 HISTCONTROL=ignoreboth          # skip duplicates and lines starting with a space
 HISTSIZE=10000
