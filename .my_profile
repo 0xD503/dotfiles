@@ -1,27 +1,54 @@
+# ~/.my_profile -- the ENVIRONMENT layer.
+#
+# WHO SOURCES THIS
+#   ~/.profile   -> login shells that read .profile (sh, dash, bash)
+#   ~/.zshenv    -> every zsh, in every mode
+#   ~/.bashrc    -> bash interactive shells (and `ssh host cmd`)
+#   ~/.zshrc     -> zsh interactive shells
+#   Sourced from several places on purpose, so the environment is identical
+#   no matter which mode the shell starts in.
+#
+# CONTRACT -- keep these three properties or the above breaks:
+#   1. POSIX sh only.   No bash/zsh syntax; dash and busybox ash must parse it.
+#   2. Silent.          Never print anything: `ssh host cmd` and scp/rsync/sftp
+#                       break if a startup file writes to stdout.
+#   3. Idempotent.      Sourcing it twice must not duplicate PATH entries.
+#
+# Aliases do NOT belong here -- they are the interactive layer, see ~/.aliases.
+
+# Default permissions: owner rwx, group r-x, others nothing.
 umask 027
 
-## set PATH so it includes user's private bin if it exists
-if [ -d "$HOME/bin" ] ; then
-    PATH="$HOME/bin:$PATH"
+# Prepend to PATH only if not already present, so repeated sourcing is a no-op.
+_myp_path_prepend() {
+    [ -d "$1" ] || return 0
+    case ":${PATH}:" in
+        *":$1:"*) ;;
+        *) PATH="$1${PATH:+:${PATH}}" ;;
+    esac
+}
+
+_myp_path_prepend "$HOME/.local/bin"
+_myp_path_prepend "$HOME/bin"
+
+# Rust toolchain, if installed. The upstream file is POSIX and idempotent.
+if [ -f "$HOME/.cargo/env" ]; then
+    . "$HOME/.cargo/env"
 fi
 
-## set PATH so it includes user's private bin if it exists
-if [ -d "$HOME/.local/bin" ] ; then
-    PATH="$HOME/.local/bin:$PATH"
-fi
+# Doom Emacs ships its `doom` binary outside any standard bin directory.
+_myp_path_prepend "${XDG_CONFIG_HOME:-$HOME/.config}/emacs/bin"
 
-### Add OPT path
-#if [ -d "/opt/gcc-arm-none-eabi" ] ; then
-#    PATH="$PATH:/opt/gcc-arm-none-eabi/bin"
-#fi
-
-if [ -f "$HOME/.aliases" ]; then
-    . $HOME/.aliases
-fi
-
+unset -f _myp_path_prepend
+export PATH
 
 export EDITOR="emacs -nw"
-#export VISUAL="emacs"
+export VISUAL="$EDITOR"
 
-# colored GCC warnings and errors
+# POSIX shells (dash, ash, ksh) read $ENV -- and only $ENV -- when they start
+# interactive without being login shells. This is what gives those shells the
+# aliases; bash and zsh get them from .bashrc / .zshrc instead.
+export ENV="$HOME/.aliases"
+
+# Colored GCC warnings and errors.
 export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'

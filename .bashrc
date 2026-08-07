@@ -1,120 +1,83 @@
-# ~/.bashrc: executed by bash(1) for non-login shells.
-# see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
-# for examples
+# ~/.bashrc -- read by bash INTERACTIVE shells.
+#
+# WHEN THIS RUNS
+#   - every new terminal window (interactive, non-login)
+#   - login shells, because ~/.profile sources this file explicitly
+#   - `ssh host 'command'` -- NOT interactive, but bash still reads .bashrc
+#     when its stdin is a network connection. That is why the environment is
+#     loaded ABOVE the interactive guard: remote commands need PATH, but they
+#     must not get aliases or a prompt.
+#
+# Distribution-neutral: everything optional is probed before use.
 
-# If not running interactively, don't do anything
+# --- environment layer (runs in every mode, must stay silent) ---------------
+if [ -f "$HOME/.my_profile" ]; then
+    . "$HOME/.my_profile"
+fi
+
+# --- interactive guard ------------------------------------------------------
+# Nothing below this line runs for scripts or `ssh host 'command'`.
 case $- in
     *i*) ;;
-      *) return;;
+    *) return ;;
 esac
 
-# don't put duplicate lines or lines starting with space in the history.
-# See bash(1) for more options
-HISTCONTROL=ignoreboth
+# --- history ----------------------------------------------------------------
+HISTCONTROL=ignoreboth          # skip duplicates and lines starting with a space
+HISTSIZE=10000
+HISTFILESIZE=20000
+shopt -s histappend             # append instead of overwriting on exit
+shopt -s cmdhist                # keep a multi-line command as one entry
 
-# append to the history file, don't overwrite it
-shopt -s histappend
+# --- shell behaviour --------------------------------------------------------
+shopt -s checkwinsize           # keep $LINES/$COLUMNS correct after each command
+shopt -s globstar 2>/dev/null   # ** matches across directories (bash >= 4)
 
-# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
-HISTSIZE=1000
-HISTFILESIZE=2000
-
-# check the window size after each command and, if necessary,
-# update the values of LINES and COLUMNS.
-shopt -s checkwinsize
-
-# If set, the pattern "**" used in a pathname expansion context will
-# match all files and zero or more directories and subdirectories.
-#shopt -s globstar
-
-# make less more friendly for non-text input files, see lesspipe(1)
-[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
-
-# set variable identifying the chroot you work in (used in the prompt below)
-if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
-    debian_chroot=$(cat /etc/debian_chroot)
-fi
-
-# set a fancy prompt (non-color, unless we know we "want" color)
-case "$TERM" in
-    xterm-color|*-256color) color_prompt=yes;;
-esac
-
-# uncomment for a colored prompt, if the terminal has the capability; turned
-# off by default to not distract the user: the focus in a terminal window
-# should be on the output of commands, not on the prompt
-#force_color_prompt=yes
-
-if [ -n "$force_color_prompt" ]; then
-    if [ -x /usr/bin/tput ] && tput setaf 1 >&/dev/null; then
-	# We have color support; assume it's compliant with Ecma-48
-	# (ISO/IEC-6429). (Lack of such support is extremely rare, and such
-	# a case would tend to support setf rather than setaf.)
-	color_prompt=yes
-    else
-	color_prompt=
-    fi
-fi
-
-if [ "$color_prompt" = yes ]; then
-    PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+# --- prompt -----------------------------------------------------------------
+# Colored only if the terminal actually supports it.
+if command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
+    PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 else
-    PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
+    PS1='\u@\h:\w\$ '
 fi
-unset color_prompt force_color_prompt
 
-# If this is an xterm set the title to user@host:dir
+# Show user@host:dir in the window title where the terminal understands it.
 case "$TERM" in
-xterm*|rxvt*)
-    PS1="\[\e]0;${debian_chroot:+($debian_chroot)}\u@\h: \w\a\]$PS1"
-    ;;
-*)
-    ;;
+    xterm*|rxvt*|alacritty|foot*|konsole*|tmux*|screen*)
+        PS1="\[\e]0;\u@\h: \w\a\]$PS1"
+        ;;
 esac
 
-# enable color support of ls and also add handy aliases
-if [ -x /usr/bin/dircolors ]; then
-    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
-    alias ls='ls --color=auto'
-    #alias dir='dir --color=auto'
-    #alias vdir='vdir --color=auto'
-
-    alias grep='grep --color=auto'
-    alias fgrep='fgrep --color=auto'
-    alias egrep='egrep --color=auto'
+# --- optional integrations --------------------------------------------------
+# Make `less` handle non-text input. Named lesspipe.sh on Arch, lesspipe on Debian.
+if command -v lesspipe.sh >/dev/null 2>&1; then
+    export LESSOPEN="| lesspipe.sh %s"
+elif command -v lesspipe >/dev/null 2>&1; then
+    eval "$(SHELL=/bin/sh lesspipe)"
 fi
 
-# colored GCC warnings and errors
-#export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
-
-# some more ls aliases
-alias ll='ls -alF'
-alias la='ls -A'
-alias l='ls -CF'
-
-# Add an "alert" alias for long running commands.  Use like so:
-#   sleep 10; alert
-alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
-
-# Alias definitions.
-# You may want to put all your additions into a separate file like
-# ~/.bash_aliases, instead of adding them here directly.
-# See /usr/share/doc/bash-doc/examples in the bash-doc package.
-
-if [ -f ~/.bash_aliases ]; then
-    . ~/.bash_aliases
-fi
-
-# enable programmable completion features (you don't need to enable
-# this, if it's already enabled in /etc/bash.bashrc and /etc/profile
-# sources /etc/bash.bashrc).
+# bash-completion lives in a different place on every distribution.
 if ! shopt -oq posix; then
-  if [ -f /usr/share/bash-completion/bash_completion ]; then
-    . /usr/share/bash-completion/bash_completion
-  elif [ -f /etc/bash_completion ]; then
-    . /etc/bash_completion
-  fi
+    for _brc_comp in \
+        /usr/share/bash-completion/bash_completion \
+        /etc/bash_completion \
+        /usr/local/share/bash-completion/bash_completion \
+        /opt/homebrew/etc/profile.d/bash_completion.sh
+    do
+        if [ -r "$_brc_comp" ]; then
+            . "$_brc_comp"
+            break
+        fi
+    done
+    unset _brc_comp
 fi
-if [ -f "$HOME/.cargo/env" ]; then
-    . $HOME/.cargo/env
+
+# --- aliases ----------------------------------------------------------------
+if [ -f "$HOME/.aliases" ]; then
+    . "$HOME/.aliases"
+fi
+
+# Machine-local overrides, never tracked in the dotfiles repo.
+if [ -f "$HOME/.bashrc.local" ]; then
+    . "$HOME/.bashrc.local"
 fi

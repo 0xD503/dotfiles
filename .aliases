@@ -1,23 +1,48 @@
-#!/bin/env sh
+# ~/.aliases -- the INTERACTIVE layer.
+#
+# WHO SOURCES THIS
+#   ~/.bashrc, ~/.zshrc   -> after their interactive guard
+#   $ENV                  -> interactive dash/ash/ksh (set in ~/.my_profile)
+#
+# CONTRACT: POSIX sh only -- this file is read by bash, zsh AND plain sh.
+# Nothing here may assume GNU userland; guard anything that is not in POSIX.
 
-
-alias python=python3
-alias emacs="emacs -nw"
-
-# enable color support of ls and also add handy aliases
-if [ -x /usr/bin/dircolors ]; then
-    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+# GNU coreutils understands --color; BSD/macOS ls does not.
+if ls --color=auto . >/dev/null 2>&1; then
     alias ls='ls --color=auto'
     alias dir='dir --color=auto'
     alias vdir='vdir --color=auto'
+elif [ "$(uname -s)" = "Darwin" ] || [ "$(uname -s)" = "FreeBSD" ]; then
+    alias ls='ls -G'
+fi
 
+if command -v dircolors >/dev/null 2>&1; then
+    if [ -r "$HOME/.dircolors" ]; then
+        eval "$(dircolors -b "$HOME/.dircolors")"
+    else
+        eval "$(dircolors -b)"
+    fi
+fi
+
+if grep --color=auto '' /dev/null >/dev/null 2>&1; then
     alias grep='grep --color=auto'
     alias fgrep='fgrep --color=auto'
     alias egrep='egrep --color=auto'
 fi
 
-# some more ls aliases
 alias ll='ls -l'
-#alias la='ls -A'
-#alias l='ls -CF'
-alias lah="ls -laht"
+alias la='ls -A'
+alias l='ls -CF'
+alias lah='ls -laht'
+
+alias emacs='emacs -nw'
+
+# Some distributions ship python3 without a `python` symlink.
+if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    alias python='python3'
+fi
+
+# Desktop notification when a long command finishes:  make -j8; alert
+if command -v notify-send >/dev/null 2>&1; then
+    alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history | tail -n1 | sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
+fi
