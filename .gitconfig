@@ -108,10 +108,22 @@
 	rvab = revert --abort
 	fa = fetch --all
 	pshoa = push origin --all
+	taga = tag --sign --annotate
+	ciassm = commit --all --signoff -S --message
+	pshoat = push origin --all --follow-tags
 [user]
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
+	signingkey = ${HOME}/.ssh/id_ed25519_signing
 [core]
 	editor = emacs -nw -q
 [init]
 	defaultBranch = master
+[gpg]
+	format = ssh
+[commit]
+	gpgsign = true
+[tag]
+	gpgsign = true
+[gpg "ssh"]
+	allowedSignersFile = ${HOME}/.config/git/allowed_signers
