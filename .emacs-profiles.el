@@ -5,4 +5,5 @@
 ;; The profile named "default" is used when none is given.
 
 (("default" . ((user-emacs-directory . "~/.config/emacs")))
+ ("mega"    . ((user-emacs-directory . "~/.mega.d")))
  ("legacy"  . ((user-emacs-directory . "~/.emacs.d"))))

@@ -27,7 +27,7 @@ CHANGES=0
 # The .local files are here as empty stubs to copy by hand. They must never be
 # deployed or collected: deploying would overwrite whatever that machine keeps
 # in them, and collecting would push one machine's overrides to all the others.
-EXCLUDES="update.sh README.md LICENSE .gitignore .bashrc.local .zshrc.local"
+EXCLUDES="update.sh README.md LICENSE .gitignore .bashrc.local .zshrc.local .mega.d/local.el"
 
 usage() {
     cat <<EOF
