@@ -36,6 +36,15 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
+# bun. Its installer appends these two lines to whichever rc file it detects,
+# which the next `update.sh user` then overwrites -- so they live here instead:
+# one copy for every shell, and nothing to lose again. BUN_INSTALL is exported
+# because bun's own upgrader and some scripts look it up.
+if [ -d "$HOME/.bun" ]; then
+    export BUN_INSTALL="$HOME/.bun"
+    _myp_path_prepend "$BUN_INSTALL/bin"
+fi
+
 # Doom Emacs ships its `doom` binary outside any standard bin directory.
 _myp_path_prepend "${XDG_CONFIG_HOME:-$HOME/.config}/emacs/bin"
 
