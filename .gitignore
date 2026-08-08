@@ -1,1 +1,11 @@
 *~
+
+# Byte- and native-compiled Lisp is built on the machine, never tracked.
+*.elc
+*.eln
+
+# MEGA keeps mutable state in XDG directories, but be explicit in case a
+# future version writes anything under the config directory itself.
+.mega.d/var/
+.mega.d/eln-cache/
+.mega.d/elpa/
