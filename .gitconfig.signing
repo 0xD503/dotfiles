@@ -1,5 +1,32 @@
-## `~` is used deliberately. git expands a leading `~` but does not expand
-## ${HOME} or $HOME
+## ~/.gitconfig.signing -- sign every commit and tag with an SSH key.
+## TEMPLATE, copied by hand; update.sh never deploys or collects it.
+##
+## PREREQUISITE, and the reason this is not deployed: `commit.gpgsign = true`
+## is not best-effort. With no key at the path below, git fails the commit
+## outright ("error: Load key ... No such file or directory") rather than
+## falling back to an unsigned one. So a machine gets this file only after it
+## has a key, never as part of a bulk install.
+##
+## Set a machine up in three steps:
+##
+##   1. Make the key (skip if you are reusing an existing one):
+##        ssh-keygen -t ed25519 -C "git signing" -f ~/.ssh/id_ed25519_signing
+##
+##   2. Let git verify your own signatures -- without this,
+##      `git log --show-signature` reports "No principal matched":
+##        mkdir -p ~/.config/git
+##        printf '%s %s\n' "$(git config --get user.email)" \
+##            "$(cat ~/.ssh/id_ed25519_signing.pub)" \
+##            >> ~/.config/git/allowed_signers
+##
+##   3. Put this file in place:
+##        cp <repo>/.gitconfig.signing ~/.gitconfig.signing
+##
+##   Then add ~/.ssh/id_ed25519_signing.pub to your forge as a SIGNING key
+##   (GitHub keeps signing and authentication keys in separate lists).
+##
+## `~` is used deliberately below. git expands a leading `~` but does not
+## expand ${HOME} or $HOME.
 
 [user]
 	signingkey = ~/.ssh/id_ed25519_signing

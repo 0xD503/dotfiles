@@ -116,7 +116,17 @@
 [init]
 	defaultBranch = master
 
-## this setting should be last
+## Keep this last. An include is applied at the point it appears, so whatever
+## it sets overrides -- or adds to -- everything above.
+##
+## ~/.gitconfig.local is OPTIONAL. update.sh does not deploy or collect it, and
+## git silently ignores an include whose path does not exist, so a machine
+## without it simply has no identity here. Copy the template by hand, once:
+##
+##   cp <repo>/.gitconfig.local ~/.gitconfig.local && $EDITOR ~/.gitconfig.local
+##
+## Not copying it means `git commit` stops with git's own "please tell me who
+## you are", which is the right failure: no identity beats the wrong identity
+## stamped on every commit from this machine.
 [include]
-	## settings here override and/or add-up above ones
 	path = ~/.gitconfig.local
