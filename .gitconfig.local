@@ -1,26 +1,6 @@
-## ~/.gitconfig.local -- per-machine git identity.  TEMPLATE, copied by hand.
-##
-## update.sh never deploys or collects this file. Deploying it would stamp one
-## address onto commits made from every checkout on every machine; collecting
-## it would push whichever identity a machine happened to have back into the
-## repo, for all the others to inherit on their next install.
-##
-## Install it once per machine, then edit:
-##
-##   cp <repo>/.gitconfig.local ~/.gitconfig.local
-##
-## ~/.gitconfig includes this file, and git ignores an include whose path does
-## not exist -- so skipping this on a machine is safe, and shows up as git's
-## own "please tell me who you are" on the first commit.
-
 [user]
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
 
-## Commit signing, also optional and also ignored when the path is absent.
-## Copy ~/.gitconfig.signing into place ONLY on a machine that already has the
-## SSH signing key -- that file turns signing on for every commit and tag, and
-## git refuses to commit at all when the key it names is missing. The file
-## itself documents how to create the key.
 [include]
 	path = ~/.gitconfig.signing

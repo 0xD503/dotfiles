@@ -24,27 +24,13 @@ CHANGES=0
 # Files that live in the repo but are not configuration to deploy.
 # Space-separated, compared literally against the repo-relative path.
 #
-# These are templates to copy by hand, not files to sync. They must never be
+# The .local files are here as empty stubs to copy by hand. They must never be
 # deployed or collected: deploying would overwrite whatever that machine keeps
 # in them, and collecting would push one machine's overrides to all the others.
-#
-#   .bashrc.local .zshrc.local .mega.d/local.el
-#       per-machine shell and editor overrides; shipped as empty stubs.
-#   .gitconfig.local
-#       your identity on THIS machine. Deploying it would stamp a personal
-#       address onto commits made from a work checkout (and vice versa);
-#       collecting it would push one identity into the repo for all machines.
-#   .gitconfig.signing
-#       turns on commit signing, which fails hard when the key it names is
-#       absent. Deploying it would break `git commit` on every machine that
-#       has not been given a signing key yet.
-#
-# Both git files are pulled in by optional `[include]` directives: git ignores
-# an include whose path does not exist, so a machine without them just gets
-# unsigned commits and git's own "tell me who you are" prompt.
-EXCLUDES="update.sh README.md LICENSE .gitignore \
-.bashrc.local .zshrc.local .mega.d/local.el \
-.gitconfig.local .gitconfig.signing"
+EXCLUDES="update.sh README.md LICENSE .gitignore"
+HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .gitconfig.local \
+.gitconfig.signing"
+EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
 
 usage() {
     cat <<EOF
