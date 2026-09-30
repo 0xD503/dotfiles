@@ -14,27 +14,28 @@
     },
     "model_parameters": []
   }, */
+  "ssh_connections": [],
   "tab_bar": {
-    "show_pinned_tabs_in_separate_row": false
+    "show_pinned_tabs_in_separate_row": false,
   },
   "tabs": {
     "show_diagnostics": "off",
     "file_icons": true,
-    "git_status": true
+    "git_status": true,
   },
   "agent_servers": {
     "claude-acp": {
-      "type": "registry"
-    }
+      "type": "registry",
+    },
   },
   "title_bar": {
-    "show_branch_status_icon": true
+    "show_branch_status_icon": true,
   },
   "status_bar": {
-    "line_endings_button": true
+    "line_endings_button": true,
   },
   "active_pane_modifiers": {
-    "inactive_opacity": 0.7
+    "inactive_opacity": 0.7,
   },
   "format_on_save": "on",
   "indent_guides": {
@@ -101,4 +102,5 @@
   },
   "soft_wrap": "prefer_line",
   "preferred_line_length": 80,
+  "use_podman": true,
 }

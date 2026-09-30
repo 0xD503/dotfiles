@@ -111,6 +111,17 @@
 	taga = tag --sign --annotate
 	ciassm = commit --all --signoff -S --message
 	pshoat = push origin --all --follow-tags
+	cissm = commit --signoff -S --message
+	cism = commit --signoff --message
+	ciasm = commit --all --signoff --message
+	g = grep -I --perl-regexp --line-number
+	gi = grep -I --perl-regexp --line-number --ignore-case
+	gu = grep -I --perl-regexp --line-number --no-index
+	giu = grep -I --perl-regexp --line-number --ignore-case --no-index
+	gs = grep -I --perl-regexp --line-number --recurse-submodules
+	gsi = grep -I --perl-regexp --line-number --recurse-submodules --ignore-case
+	gsu = grep -I --perl-regexp --line-number --recurse-submodules --no-index
+	gsiu = grep -I --perl-regexp --line-number --recurse-submodules --no-index --ignore-case
 [core]
 	editor = emacs -nw -q
 [init]
@@ -120,3 +131,17 @@
 [include]
 	## settings here override and/or add-up above ones
 	path = ~/.gitconfig.local
+[merge]
+	conflictStyle = zdiff3
+[diff]
+	algorithm = histogram
+	colorMoved = zebra
+	colorMovedWS = allow-indentation-change
+[branch]
+	sort = -committerdate
+[grep]
+	lineNumber = true
+	patternType = perl
+	fullName = true
+[pager]
+	grep = false
