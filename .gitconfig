@@ -126,11 +126,6 @@
 	editor = emacs -nw -q
 [init]
 	defaultBranch = master
-
-## this setting should be last
-[include]
-	## settings here override and/or add-up above ones
-	path = ~/.gitconfig.local
 [merge]
 	conflictStyle = zdiff3
 [diff]
@@ -145,3 +140,8 @@
 	fullName = true
 [pager]
 	grep = false
+
+## this setting should be last
+[include]
+	## settings here override and/or add-up above ones
+	path = ~/.gitconfig.local
