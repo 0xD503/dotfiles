@@ -32,6 +32,10 @@ HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .gitconfig.local \
 .gitconfig.signing"
 EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
 
+# Oh my tmux!, the tmux config that the tracked .tmux.conf.local customizes.
+OMT_URL="https://github.com/gpakosz/.tmux.git"
+OMT_DIR="$HOME/.tmux"
+
 usage() {
     cat <<EOF
 usage: $PROG COMMAND [-n] [-f]
@@ -42,11 +46,12 @@ commands:
   link    symlink \$HOME entries at the repo instead of copying (opt-in)
   diff    show what differs between repo and \$HOME; changes nothing
   list    print the managed files and exit
+  tmux    install Oh my tmux! into ~/.tmux, or update it
   help    this text
 
 options:
   -n      dry run: print what would happen, touch nothing
-  -f      skip backups when overwriting (user/link only)
+  -f      skip backups when overwriting (user/link/tmux only)
 
 examples:
   ./$PROG user -n     preview an install
@@ -253,6 +258,88 @@ cmd_diff() {
     fi
 }
 
+# Install Oh my tmux! the way upstream documents for ~: a clone in ~/.tmux, and
+# ~/.tmux.conf linked into it. Running it again updates the clone. Upstream's
+# .tmux.conf.local template is not copied; `user` deploys this repo's instead.
+cmd_tmux() {
+    msg "Installing Oh my tmux! into $OMT_DIR"
+
+    if ! command -v git >/dev/null 2>&1; then
+        fail "git is required"
+        return 1
+    fi
+    command -v tmux >/dev/null 2>&1 ||
+        note "tmux is not installed; Oh my tmux! takes effect once it is"
+
+    if [ -d "$OMT_DIR/.git" ]; then
+        # A ~/.tmux clone of something else is not ours to pull.
+        if ! grep -q 'gpakosz/\.tmux' "$OMT_DIR/.tmux.conf" 2>/dev/null; then
+            fail "$OMT_DIR is a git clone, but not of Oh my tmux!"
+            return 1
+        fi
+        if [ "$DRY_RUN" -eq 1 ]; then
+            # Ask the remote rather than fetch: a dry run writes nothing.
+            if ! tmux_remote=$(git -C "$OMT_DIR" ls-remote origin HEAD); then
+                fail "cannot reach: $OMT_URL"
+                return 1
+            fi
+            tmux_remote=$(printf '%s\n' "$tmux_remote" | cut -f1)
+            if [ "$tmux_remote" != "$(git -C "$OMT_DIR" rev-parse HEAD)" ]; then
+                note "update  $OMT_DIR"
+                CHANGES=$((CHANGES + 1))
+            fi
+        else
+            tmux_old=$(git -C "$OMT_DIR" rev-parse --short HEAD)
+            if ! git -C "$OMT_DIR" pull --quiet --ff-only; then
+                fail "cannot update: $OMT_DIR"
+                return 1
+            fi
+            tmux_new=$(git -C "$OMT_DIR" rev-parse --short HEAD)
+            if [ "$tmux_new" != "$tmux_old" ]; then
+                note "update  $OMT_DIR  ($tmux_old..$tmux_new)"
+                CHANGES=$((CHANGES + 1))
+            fi
+        fi
+    elif [ -e "$OMT_DIR" ] || [ -L "$OMT_DIR" ]; then
+        fail "$OMT_DIR exists and is not a git clone; move it aside first"
+        return 1
+    else
+        note "clone   $OMT_URL"
+        if [ "$DRY_RUN" -eq 0 ] &&
+            ! git clone --quiet --single-branch -- "$OMT_URL" "$OMT_DIR"; then
+            fail "cannot clone: $OMT_URL"
+            return 1
+        fi
+        CHANGES=$((CHANGES + 1))
+    fi
+
+    tmux_conf="$HOME/.tmux.conf"
+    tmux_link=$(readlink -- "$tmux_conf" 2>/dev/null) || tmux_link=
+    case $tmux_link in
+        # the second form is what upstream's manual install creates
+        "$OMT_DIR/.tmux.conf" | .tmux/.tmux.conf) ;;
+        *)
+            note "link    .tmux.conf"
+            backup_file "$tmux_conf" .tmux.conf || return 1
+            if [ "$DRY_RUN" -eq 0 ]; then
+                if [ -e "$tmux_conf" ] || [ -L "$tmux_conf" ]; then
+                    rm -f -- "$tmux_conf" ||
+                        { fail "cannot remove: $tmux_conf"; return 1; }
+                fi
+                if ! ln -s -- "$OMT_DIR/.tmux.conf" "$tmux_conf"; then
+                    fail "cannot link: $tmux_conf"
+                    return 1
+                fi
+            fi
+            CHANGES=$((CHANGES + 1))
+            ;;
+    esac
+
+    if [ ! -e "$HOME/.tmux.conf.local" ]; then
+        note "no ~/.tmux.conf.local yet: '$PROG user' installs this repo's copy"
+    fi
+}
+
 # --- argument parsing -------------------------------------------------------
 
 [ $# -ge 1 ] || { warn "no command given"; usage >&2; exit 2; }
@@ -273,7 +360,7 @@ while [ $# -gt 0 ]; do
 done
 
 case $COMMAND in
-    user | repo | link | diff | list) ;;
+    user | repo | link | diff | list | tmux) ;;
     -h | --help | help) usage; exit 0 ;;
     *) warn "unknown command: $COMMAND"; usage >&2; exit 2 ;;
 esac
@@ -314,6 +401,7 @@ case $COMMAND in
     repo) cmd_repo ;;
     link) cmd_link ;;
     diff) cmd_diff ;;
+    tmux) cmd_tmux ;;
 esac
 
 if [ "$COMMAND" = user ] || [ "$COMMAND" = link ]; then
@@ -322,7 +410,7 @@ fi
 
 if [ "$COMMAND" != diff ]; then
     if [ "$CHANGES" -eq 0 ]; then
-        msg "Already up to date."
+        [ "$ERRORS" -eq 0 ] && msg "Already up to date."
     elif [ "$DRY_RUN" -eq 1 ]; then
         msg "Done: $CHANGES file(s) would change."
     else
