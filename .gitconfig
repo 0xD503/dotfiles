@@ -114,14 +114,19 @@
 	cissm = commit --signoff -S --message
 	cism = commit --signoff --message
 	ciasm = commit --all --signoff --message
-	g = grep -I --perl-regexp --line-number
-	gi = grep -I --perl-regexp --line-number --ignore-case
-	gu = grep -I --perl-regexp --line-number --no-index
-	giu = grep -I --perl-regexp --line-number --ignore-case --no-index
-	gs = grep -I --perl-regexp --line-number --recurse-submodules
-	gsi = grep -I --perl-regexp --line-number --recurse-submodules --ignore-case
-	gsu = grep -I --perl-regexp --line-number --recurse-submodules --no-index
-	gsiu = grep -I --perl-regexp --line-number --recurse-submodules --no-index --ignore-case
+	g = grep --perl-regexp --line-number -I
+	gi = grep --perl-regexp --line-number -I --ignore-case
+	gu = grep --perl-regexp --line-number -I --no-index
+	giu = grep --perl-regexp --line-number -I --ignore-case --no-index
+	gs = grep --perl-regexp --line-number -I --recurse-submodules
+	gsi = grep --perl-regexp --line-number -I --recurse-submodules --ignore-case
+	gsu = grep --perl-regexp --line-number -I --recurse-submodules --no-index
+	gsiu = grep --perl-regexp --line-number -I --recurse-submodules --no-index --ignore-case
+	cis = commit --signoff
+	cias = commit --all --signoff
+	cisf = commit --signoff --fixup
+	cisfh = commit --signoff --fixup HEAD
+	ciasfh = commit --all --signoff --fixup HEAD
 [core]
 	editor = emacs -nw -q
 [init]
