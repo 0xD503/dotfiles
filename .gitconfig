@@ -7,7 +7,7 @@
 	stu = status -uno
 	df = diff
 	lg = log --oneline --graph
-	mg = merge
+	mg = merge --no-ff
 	rb = rebase
 	rbc = rebase --continue
 	dfc = diff --cached
@@ -127,6 +127,7 @@
 	cisf = commit --signoff --fixup
 	cisfh = commit --signoff --fixup HEAD
 	ciasfh = commit --all --signoff --fixup HEAD
+	pltags = pull origin --tags
 [core]
 	editor = emacs -nw -q
 [init]
