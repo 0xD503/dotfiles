@@ -3,7 +3,11 @@
 ;;; Commentary:
 
 ;; A project is what Emacs's own project.el says it is: normally a version
-;; control checkout.  MEGA adds nothing to that definition.
+;; control checkout.  MEGA adds one case to that definition: a directory
+;; that is not under version control but holds a file only a project's root
+;; has, such as Cargo.toml (`mega-project-markers').  Without it a fresh
+;; `cargo new --vcs none', or an unpacked archive, would have no root to
+;; build, search or debug from.
 ;;
 ;; `C-c p' is project.el's whole command map.  The ones used most:
 ;;
@@ -47,6 +51,39 @@
 ;; `C-c p' is bound to this name.  A key can only be a prefix through a symbol
 ;; if the symbol's function is the keymap, and Emacs's own map is a variable.
 (defalias 'mega-project-map project-prefix-map)
+
+(defcustom mega-project-markers
+  '("Cargo.toml" "go.mod" "build.zig" "pyproject.toml" "CMakeLists.txt"
+    "package.json" ".devcontainer")
+  "Files that mark the root of a project that is not under version control.
+The nearest directory at or above a file that holds one of these is the
+root.  Version control is asked first, so inside a checkout these mean
+nothing: a crate of a workspace stays part of the workspace's project.
+Keep to names that are found only at a root; a Makefile is not one."
+  :type '(repeat string)
+  :group 'mega)
+
+(defun mega-project-try-markers (directory)
+  "The project DIRECTORY is in, found by `mega-project-markers', or nil.
+For `project-find-functions', after version control has had its say."
+  ;; Not on another machine: every directory on the way up is a round trip.
+  (unless (file-remote-p directory)
+    (when-let* ((found (locate-dominating-file
+                        directory
+                        (lambda (candidate)
+                          (seq-some (lambda (marker)
+                                      (file-exists-p (expand-file-name marker candidate)))
+                                    mega-project-markers)))))
+      (let ((root (file-name-as-directory (expand-file-name found))))
+        ;; A marker in the home directory, or at the top of the disk, does
+        ;; not make everything below it one project.
+        (unless (member root (list "/" (file-name-as-directory (expand-file-name "~"))))
+          (cons 'transient root))))))
+
+;; After project.el has loaded, never before: its own list of finders is a
+;; default that a value set earlier would replace.
+(with-eval-after-load 'project
+  (add-hook 'project-find-functions #'mega-project-try-markers 90))
 
 (defun mega-project-root (&optional directory)
   "Return the root of the project containing DIRECTORY, or nil.

@@ -78,5 +78,50 @@
   (should speedbar-prefer-window)
   (should-not speedbar-use-images))
 
+;;;; Projects that are not under version control
+
+(ert-deftest mega-project-a-manifest-marks-a-root-without-version-control ()
+  (mega-test-with-directory dir
+    (let ((deep (expand-file-name "src/bin/" dir)))
+      (make-directory deep t)
+      ;; Nothing marks it yet.
+      (should-not (mega-project-root deep))
+      (mega-test-write (expand-file-name "Cargo.toml" dir) "[package]" "")
+      (should (equal (mega-project-root deep) dir))
+      (should (equal (mega-project-root dir) dir))
+      ;; Emacs's own project commands see the same project.
+      (let ((default-directory deep))
+        (should (equal (expand-file-name (project-root (project-current nil))) dir))))))
+
+(ert-deftest mega-project-version-control-is-asked-before-the-markers ()
+  "A crate inside a checkout stays part of the checkout's project."
+  (mega-test-with-directory dir
+    (mega-test-write (expand-file-name ".git/HEAD" dir) "ref: refs/heads/main" "")
+    (mega-test-write (expand-file-name "crates/emu/Cargo.toml" dir) "[package]" "")
+    (should (equal (mega-project-root (expand-file-name "crates/emu/" dir)) dir))))
+
+(ert-deftest mega-project-a-marker-never-makes-home-or-the-disk-a-project ()
+  (mega-test-with-directory dir
+    (let* ((home (file-name-as-directory (expand-file-name "~")))
+           (marker (expand-file-name "pyproject.toml" home))
+           (below (expand-file-name "notes/" dir)))
+      (make-directory below t)
+      (unwind-protect
+          (progn
+            (mega-test-write marker "")
+            (should-not (mega-project-try-markers home))
+            (should-not (mega-project-try-markers "/")))
+        (delete-file marker))
+      ;; Which names count is yours to say.
+      (mega-test-write (expand-file-name "Makefile" dir) "all:" "")
+      (should-not (mega-project-root below))
+      (let ((mega-project-markers '("Makefile")))
+        (should (equal (mega-project-root below) dir))))))
+
+(ert-deftest mega-project-markers-are-not-looked-for-on-another-machine ()
+  (cl-letf (((symbol-function 'locate-dominating-file)
+             (lambda (&rest _) (error "Walked a remote tree"))))
+    (should-not (mega-project-try-markers "/ssh:mega-test.invalid:/srv/app/src/"))))
+
 (provide 'mega-project-test)
 ;;; mega-project-test.el ends here

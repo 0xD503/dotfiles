@@ -4,12 +4,15 @@
 #
 # Everything runs in a sandbox: $HOME and the XDG directories point into a
 # throwaway directory, so no test reads or writes your real Emacs state.
-# Nothing uses the network.  There are four stages:
+# Nothing uses the network.  There are five stages:
 #
 #   lint      byte-compile every file, with warnings as errors
 #   unit      the ERT suite in tests/mega2/, run against the real init files
 #   boot      start MEGA in batch and check what startup did: no failed
 #             module, no program run, no connection, within the time budget
+#   bench     time what a person waits for (a keystroke, the completion
+#             menu, a search, a save...) against a budget each; every time
+#             is printed, so a slowdown shows before it fails
 #   terminal  start it for real in a pseudo-terminal: directly, through
 #             chemacs2 if you have it, and with a too-old Emacs if one exists
 #
@@ -18,13 +21,19 @@
 #
 # usage: tests/test_mega2.sh [STAGE...]
 #
-#   STAGE              run only these stages (default: all four)
+#   STAGE              run only these stages (default: all five)
 #
 # environment:
 #   EMACS              the Emacs under test                    (default: emacs)
 #   EMACS_OLD          an Emacs older than MEGA supports, for the refusal
 #                      test          (default: /usr/bin/emacs, if it is older)
 #   MEGA_STARTUP_BUDGET_MS   startup budget for the boot stage  (default: 100)
+#   MEGA_BENCH_SCALE   multiply the budgets of the bench stage, for a
+#                      slower machine                            (default: 1)
+#   MEGA_BENCH_SAVE    write the times of the bench stage to this file
+#   MEGA_BENCH_COMPARE compare them with a file written that way, and fail
+#                      on anything MEGA_BENCH_TOLERANCE times slower
+#                      than it was                               (default: 2)
 #   MEGA_TEST_CONFIG   the configuration to test          (default: ../.mega2.d)
 #
 # Portability: POSIX sh.  The terminal stage needs script(1) from util-linux
@@ -171,6 +180,30 @@ stage_boot() {
     fi
 }
 
+# --- bench ------------------------------------------------------------------
+
+stage_bench() {
+    tab=$(printf '\t')
+    out=$("$EMACS" -Q --batch -L "$TESTS" -l mega-test-helper \
+              -l "$TESTS/mega-bench.el" -f mega-bench-run 2> "$SANDBOX/bench.err")
+    rc=$?
+    measured=0
+    # A here-document, not a pipe: the loop must run in this shell to count.
+    while IFS=$tab read -r verdict text; do
+        case $verdict in
+            ok)   ok "bench  $text"; measured=$((measured + 1)) ;;
+            bad)  bad "bench  $text"; measured=$((measured + 1)) ;;
+            note) printf '      %s\n' "$text" ;;
+        esac
+    done <<BENCH_RESULTS
+$out
+BENCH_RESULTS
+    if [ "$measured" -eq 0 ]; then
+        bad "bench  nothing was measured (exit $rc)"
+        cut -c1-400 "$SANDBOX/bench.err" | tail -n 20 | detail
+    fi
+}
+
 # --- terminal ---------------------------------------------------------------
 
 # Start "$1" (an Emacs) in a 40x120 pseudo-terminal of type $2 that offers $3
@@ -295,11 +328,11 @@ stage_terminal() {
 
 # --- run --------------------------------------------------------------------
 
-[ $# -gt 0 ] || set -- lint unit boot terminal
+[ $# -gt 0 ] || set -- lint unit boot bench terminal
 
 for stage do
     case $stage in
-        lint | unit | boot | terminal) ;;
+        lint | unit | boot | bench | terminal) ;;
         *) printf '%s: unknown stage: %s\n' "$0" "$stage" >&2; exit 2 ;;
     esac
 done

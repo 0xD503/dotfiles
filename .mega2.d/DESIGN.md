@@ -203,16 +203,27 @@ tests/test_mega2.sh
   node of its own; and MEGA's own mark for the oldest state is dropped the
   moment the end of the list changes.
 - **Two debugger interfaces, one set of keys.** On the host MEGA starts
-  Emacs's own (GUD; for gdb the full `gdb-mi`), which is mature and costs
-  no code. In a container that one needs a terminal of the host, so MEGA
-  talks to gdb as a debug adapter instead (`mega-dap`), over the same
+  Emacs's own (GUD), which is mature and costs no code. In a container the
+  full form of that needs a terminal of the host, so MEGA talks to the
+  debugger as a debug adapter instead (`mega-dap`), over the same
   `podman exec` every other tool uses. `mega-debug-backend` overrides the
   rule; an adapter that is missing or too old falls back to GUD. The
   client is three layers — bytes, session, display — and wholly
-  asynchronous: a key sends a request and returns. It was written against
-  a recorded conversation with gdb 16, whose habits the test stand-in
-  keeps: `launch` is answered only after `configurationDone`, breakpoints
-  start unverified, frame ids are stale after every stop.
+  asynchronous: a key sends a request and returns.
+- **The debugger is chosen before the interface.** `mega-debug-prefer`
+  ranks the families, lldb before gdb by default, and outranks the choice
+  of interface: lldb through its console is taken before gdb through an
+  adapter. Both lists of candidates carry a `:family`, and
+  `mega-debug-plan` is the one place the two are weighed.
+- **The adapter client was written against recordings, not the
+  specification.** Real conversations with gdb 16 and lldb-dap 19 were
+  captured first, and the test stand-in plays either back with its habits
+  intact, because they disagree on every point that matters: gdb says
+  "initialized" at once and answers `launch` only after
+  `configurationDone`, lldb the other way round; gdb's breakpoints start
+  unverified and its frame ids go stale at every stop; lldb announces a
+  step before answering it, ends the program's lines with CR LF, and
+  crashes with a page of backtrace when told to disconnect.
 - **Programs that take long** (`claude --print`) go through
   `mega-exec-start`, which returns at once and calls back; a mistake in the
   callback is reported, not raised, because it runs in the middle of
@@ -235,16 +246,25 @@ Each milestone ends with its unit tests, doctor rows and guide entries.
 
 ## Testing
 
-`tests/test_mega2.sh` runs four stages in a sandbox, without the network:
+`tests/test_mega2.sh` runs five stages in a sandbox, without the network:
 
 | Stage | Checks |
 | --- | --- |
 | lint | Every file byte-compiles with warnings as errors |
 | unit | The ERT suite, against a session started from the real init files |
 | boot | Startup fails no module, runs no program, opens no connection, and fits the time budget |
+| bench | What a person waits for, each against a budget: a keystroke, the completion menu, fuzzy file matching, search, save, undo history and tree, debugger messages, first use of a module |
 | terminal | Real sessions in a pseudo-terminal: 24-bit, 256 and 8 colours, under a tmux terminal type, through chemacs2, and an old Emacs being refused |
 
 Afterwards the configuration directory must be byte-for-byte what it was.
+
+The bench stage is how performance, last of the priorities, is still kept
+honest. A budget is about when a person would notice, several times what
+the code takes today, and the best of three rounds counts, so a busy machine
+does not fail it. Every time is printed beside its budget, and a run can be
+saved and compared with (`MEGA_BENCH_SAVE`, `MEGA_BENCH_COMPARE`), so a
+slowdown is seen while it is still far from its budget. A new feature with
+something a person waits on gets a benchmark in `tests/mega2/mega-bench.el`.
 
 Three things learned while building it, worth keeping in mind:
 
@@ -286,17 +306,26 @@ Three things learned while building it, worth keeping in mind:
   stand-in. The arguments of `mega-claude-print-arguments` are taken from
   the program's own help and their values pass its checks, but no question
   has been sent with them: that would have been a request nobody asked for.
-- **Debugging in a container** was run for real in both forms, beyond the
-  stand-ins of the suite: gdb 16.3 inside a container made from a
-  `devcontainer.json`, through the adapter client and through gdb's plain
-  console (`gud-gdb`, the fallback), with a breakpoint set from the host
-  buffer and the line followed in the host file.
-- **Adapters.** Only gdb is in `mega-dap-adapters`, because only gdb could
-  be tried. lldb-dap and debugpy are a table row each (the launch
-  arguments differ per adapter and are fixed in `mega-dap-start` for now).
-  Not done: conditional breakpoints, watch expressions, expanding a
-  structure in the variables list, several threads shown at once, attaching
-  to a running program, and giving the program arguments or input.
+- **Debugging in a container** was run for real, beyond the stand-ins of
+  the suite, inside a container made from a `devcontainer.json`: lldb 19
+  and gdb 16.3, each through the adapter client and through its console
+  (the fallback), with a breakpoint set from the host buffer and the line
+  followed in the host file.
+- **Adapters.** lldb-dap and gdb are in `mega-dap-adapters`; both were run
+  for real, lldb also on a Rust program (with the scripts Rust ships, a
+  `String` shows as its text). debugpy would be one more row with a
+  `:launch` function. Not done: conditional breakpoints, watch expressions,
+  expanding a structure in the variables list, several threads shown at
+  once, attaching to a running program, and giving the program arguments
+  or input.
+- **lldb through GUD in a container** works, but a command given in the
+  first second is lost: Emacs's lldb interface sets lldb up by feeding it
+  Python, and without a terminal lldb takes whatever arrives meanwhile as
+  more Python. On the host lldb could not be tried at all: none is
+  installed.
+- **A project without version control** is recognised by a manifest at its
+  root (`mega-project-markers`). The list is deliberately short; a Makefile
+  is not on it, because one may sit in any directory.
 - **Undo tree extras** left out: a diff between two states, and marking the
   state that is saved on disk.
 - **One ruler.** Emacs draws a single ruler; several at once would be new code.

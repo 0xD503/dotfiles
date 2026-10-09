@@ -63,18 +63,35 @@
       (let ((inhibit-message t)) (python-mode))
       (should (eq (mega-debug-language dir) 'python)))))
 
-(ert-deftest mega-debug-chooses-the-first-debugger-that-exists ()
+(ert-deftest mega-debug-chooses-the-preferred-debugger-that-exists ()
+  ;; lldb before gdb, where both are there.
   (mega-debug-test--with-tools '("gdb" "lldb")
-    (should (eq (car (mega-debug-choose 'rust dir)) 'gdb))
-    (should (eq (car (mega-debug-choose 'native dir)) 'gdb))
+    (should (eq (car (mega-debug-choose 'rust dir)) 'lldb))
+    (should (eq (car (mega-debug-choose 'native dir)) 'lldb))
     (should-not (mega-debug-choose 'python dir)))
-  (mega-debug-test--with-tools '("gdb" "rust-gdb" "python3")
-    (should (eq (car (mega-debug-choose 'rust dir)) 'rust-gdb))
+  ;; Rust's own wrapper before the plain debugger of the same family.
+  (mega-debug-test--with-tools '("gdb" "rust-gdb" "lldb" "rust-lldb" "python3")
+    (should (eq (car (mega-debug-choose 'rust dir)) 'rust-lldb))
+    (should (eq (car (mega-debug-choose 'native dir)) 'lldb))
     (should (eq (car (mega-debug-choose 'python dir)) 'pdb)))
-  (mega-debug-test--with-tools '("lldb")
-    (should (eq (car (mega-debug-choose 'rust dir)) 'lldb)))
+  ;; Whatever there is, when the preferred one is not.
+  (mega-debug-test--with-tools '("gdb" "rust-gdb")
+    (should (eq (car (mega-debug-choose 'rust dir)) 'rust-gdb))
+    (should (eq (car (mega-debug-choose 'native dir)) 'gdb)))
   (mega-debug-test--with-tools nil
     (should-not (mega-debug-choose 'native dir))))
+
+(ert-deftest mega-debug-the-preference-is-yours-to-turn-round ()
+  (mega-debug-test--with-tools '("gdb" "rust-gdb" "lldb" "rust-lldb")
+    (should (equal mega-debug-prefer '(lldb gdb)))
+    (let ((mega-debug-prefer '(gdb lldb)))
+      (should (eq (car (mega-debug-choose 'rust dir)) 'rust-gdb))
+      (should (eq (car (mega-debug-choose 'native dir)) 'gdb)))
+    ;; A family left out of the list comes after those in it.
+    (let ((mega-debug-prefer '(gdb)))
+      (should (eq (car (mega-debug-choose 'native dir)) 'gdb))
+      (should (equal (mapcar #'car (mega-debug-candidates 'rust))
+                     '(rust-gdb gdb rust-lldb lldb))))))
 
 (ert-deftest mega-debug-looks-for-the-debugger-where-the-tools-are ()
   (mega-debug-test--with-tools nil
@@ -98,6 +115,30 @@
       ;; A name that belongs to a later table is not the package's.
       (mega-test-write manifest "[package]" "version = \"1\""
                        "" "[lib]" "name = \"not-this\"")
+      (should-not (mega-debug--cargo-binary dir)))))
+
+(ert-deftest mega-debug-finds-the-binary-of-the-package-you-are-in ()
+  "A workspace builds its packages into the `target' at its root."
+  (mega-test-with-directory dir
+    (mega-test-write (expand-file-name "Cargo.toml" dir)
+                     "[workspace]" "members = [\"crates/*\"]")
+    (mega-test-write (expand-file-name "crates/emu/Cargo.toml" dir)
+                     "[package]" "name = \"emu\"")
+    (mega-test-write (expand-file-name "crates/tool/Cargo.toml" dir)
+                     "[package]" "name = \"tool\"")
+    (let ((default-directory (expand-file-name "crates/emu/src/" dir)))
+      (make-directory default-directory t)
+      (should (equal (mega-debug--cargo-binary dir)
+                     (expand-file-name "target/debug/emu" dir))))
+    (let ((default-directory (expand-file-name "crates/tool/" dir)))
+      (should (equal (mega-debug--cargo-binary dir)
+                     (expand-file-name "target/debug/tool" dir)))
+      ;; A package built on its own has its own `target'; what exists wins.
+      (mega-test-write (expand-file-name "crates/tool/target/debug/tool" dir) "")
+      (should (equal (mega-debug--cargo-binary dir)
+                     (expand-file-name "crates/tool/target/debug/tool" dir))))
+    ;; At the root of a workspace there is no one package to guess.
+    (let ((default-directory dir))
       (should-not (mega-debug--cargo-binary dir)))))
 
 (ert-deftest mega-debug-remembers-what-was-debugged-last ()
@@ -215,7 +256,7 @@ STARTED becomes (FUNCTION COMMAND-LINE DIRECTORY) when one is called."
   (mega-debug-test--with-tools nil
     (let* ((default-directory dir)
            (err (should-error (with-temp-buffer (mega-debug)) :type 'user-error)))
-      (should (string-match-p "gdb, lldb" (error-message-string err))))))
+      (should (string-match-p "lldb, gdb" (error-message-string err))))))
 
 ;;;; The keys
 

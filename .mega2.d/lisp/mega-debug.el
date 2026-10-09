@@ -23,6 +23,9 @@
 ;; The debugger's own buffer takes its commands as usual, and with gdb
 ;; `M-x gdb-many-windows' adds the locals, the stack and the breakpoints.
 ;;
+;; Where both are installed lldb is taken before gdb; `mega-debug-prefer'
+;; says so and can say otherwise.
+;;
 ;; A debugger runs the program, so it needs a project you have trusted
 ;; (mega-trust.el), and it runs where the project's tools are: in the
 ;; project's container if you joined one.  File names the debugger reports
@@ -32,9 +35,9 @@
 ;; terminal of this machine for the program's input and output.  MEGA talks
 ;; to gdb as a debug adapter there instead (mega-dap.el), which shows the
 ;; stack and the variables in a window below and lets you set breakpoints
-;; before starting.  That needs gdb 14 or newer in the container; with an
-;; older one you get gdb's plain console.  `mega-debug-backend' overrides
-;; the choice.
+;; before starting.  That needs lldb's adapter (lldb-dap) or gdb 14 or newer
+;; in the container; without either you get the debugger's console.
+;; `mega-debug-backend' overrides the choice of interface.
 ;;
 ;; Privacy: gdb can fetch missing debug information from a "debuginfod"
 ;; server, which tells that server what you are debugging.  MEGA switches
@@ -86,34 +89,51 @@ Wherever no usable adapter is found, Emacs's own interface is used."
   :type '(choice (const auto) (const gud) (const dap))
   :group 'mega)
 
-(defun mega-debug-adapter (language root)
-  "The debug adapter to use for LANGUAGE in the project at ROOT, or nil.
-Nil means Emacs's own debugger interface."
-  (when (pcase mega-debug-backend
-          ('dap t)
-          ('auto (plist-get (mega-exec-context root) :wrap)))
-    (require 'mega-dap)
-    (mega-dap-choose language root)))
+(defcustom mega-debug-prefer '(lldb gdb)
+  "Which debugger to take where more than one would do, best first.
+Each name is a family: `lldb' is lldb, rust-lldb and lldb's debug
+adapter; `gdb' is gdb and rust-gdb, in either of its two guises.
+
+This outranks `mega-debug-backend': the debugger you prefer is used
+through the best interface it has, even where another debugger would
+offer a better one."
+  :type '(repeat (choice (const lldb) (const gdb)))
+  :group 'mega)
 
 (defvar mega-debuggers
-  '((rust-gdb  :program "rust-gdb"  :arguments ("-i=mi") :start gdb
+  '((rust-lldb :family lldb :program "rust-lldb" :arguments nil       :start lldb)
+    (lldb      :family lldb :program "lldb"      :arguments nil       :start lldb)
+    (rust-gdb  :family gdb  :program "rust-gdb"  :arguments ("-i=mi") :start gdb
                :plain ("--fullname"))
-    (gdb       :program "gdb"       :arguments ("-i=mi") :start gdb
+    (gdb       :family gdb  :program "gdb"       :arguments ("-i=mi") :start gdb
                :plain ("--fullname"))
-    (rust-lldb :program "rust-lldb" :arguments nil       :start lldb)
-    (lldb      :program "lldb"      :arguments nil       :start lldb)
-    (pdb       :program "python3"   :arguments ("-m" "pdb") :start pdb))
+    (pdb       :family pdb  :program "python3"   :arguments ("-m" "pdb") :start pdb))
   "The debuggers MEGA can start: (NAME PROPERTY VALUE...).
-:program is what to run and :arguments what to give it before the thing
-to debug; :start is the Emacs command that takes the command line.
-:plain, when present, replaces :arguments inside a container, where
-`gud-gdb' is used instead of :start.")
+:family is what `mega-debug-prefer' ranks.  :program is what to run
+and :arguments what to give it before the thing to debug; :start is the
+Emacs command that takes the command line.  :plain, when present,
+replaces :arguments inside a container, where `gud-gdb' is used instead
+of :start.")
 
 (defvar mega-debug-languages
   '((python pdb)
-    (rust rust-gdb gdb rust-lldb lldb)
-    (native gdb lldb))
-  "Which debuggers to try for a language, in order: (LANGUAGE NAME...).")
+    (rust rust-lldb lldb rust-gdb gdb)
+    (native lldb gdb))
+  "Which debuggers suit a language: (LANGUAGE NAME...).
+`mega-debug-prefer' orders the families; within a family, the order
+here counts.")
+
+(defun mega-debug--rank (entry)
+  "Where the family of ENTRY, a debugger or an adapter, stands in the preference.
+Smaller is better; a family that is not ranked comes after those that are."
+  (or (seq-position mega-debug-prefer (plist-get (cdr entry) :family))
+      (length mega-debug-prefer)))
+
+(defun mega-debug-candidates (language)
+  "The debuggers that suit LANGUAGE, the preferred first."
+  (sort (delq nil (mapcar (lambda (name) (assq name mega-debuggers))
+                          (cdr (assq language mega-debug-languages))))
+        (lambda (a b) (< (mega-debug--rank a) (mega-debug--rank b)))))
 
 (defvar mega-debug--targets nil
   "What was debugged last in each project: an alist (ROOT . TARGET).")
@@ -128,28 +148,71 @@ ROOT is the root of its project."
         (t 'native)))
 
 (defun mega-debug-choose (language root)
-  "The first debugger for LANGUAGE that exists where ROOT's tools run.
+  "The preferred debugger for LANGUAGE that exists where ROOT's tools run.
 Return its entry in `mega-debuggers', or nil."
-  (seq-some (lambda (name)
-              (let ((entry (assq name mega-debuggers)))
-                (and (mega-exec-find (plist-get (cdr entry) :program) root)
-                     entry)))
-            (cdr (assq language mega-debug-languages))))
+  (seq-find (lambda (entry)
+              (mega-exec-find (plist-get (cdr entry) :program) root))
+            (mega-debug-candidates language)))
+
+(defun mega-debug-plan (language root)
+  "How to debug LANGUAGE in the project at ROOT.
+Return (dap . ADAPTER) for a debug adapter session, (gud . DEBUGGER) for
+Emacs's own interface, or nil if nothing is installed.
+
+The debugger comes first, the interface second: where an adapter may be
+used at all (`mega-debug-backend'), it is used unless a debugger you
+rank higher (`mega-debug-prefer') is there and has none."
+  (let ((entry (mega-debug-choose language root))
+        (adapter (and (pcase mega-debug-backend
+                        ('dap t)
+                        ('auto (plist-get (mega-exec-context root) :wrap)))
+                      (progn (require 'mega-dap)
+                             (mega-dap-choose language root mega-debug-prefer)))))
+    (cond ((and adapter
+                (or (null entry)
+                    (eq mega-debug-backend 'dap)
+                    (<= (mega-debug--rank adapter) (mega-debug--rank entry))))
+           (cons 'dap adapter))
+          (entry (cons 'gud entry)))))
+
+(defun mega-debug-adapter (language root)
+  "The debug adapter to use for LANGUAGE in the project at ROOT, or nil.
+Nil means Emacs's own debugger interface, or no debugger at all."
+  (let ((plan (mega-debug-plan language root)))
+    (and (eq (car plan) 'dap) (cdr plan))))
 
 ;;;; What to debug
 
-(defun mega-debug--cargo-binary (root)
-  "The debug binary a Cargo project at ROOT builds, or nil.
-Read from the `name' of the [package] table; never by running cargo."
-  (let ((manifest (expand-file-name "Cargo.toml" root)))
-    (when (file-readable-p manifest)
-      (with-temp-buffer
-        (insert-file-contents manifest)
-        (when (and (re-search-forward "^\\[package\\]" nil t)
-                   (re-search-forward
-                    "^\\(?:\\[\\|name[ \t]*=[ \t]*\"\\([^\"\n]+\\)\"\\)" nil t)
-                   (match-string 1))
-          (expand-file-name (concat "target/debug/" (match-string 1)) root))))))
+(defun mega-debug--cargo-package (directory)
+  "The Cargo package DIRECTORY belongs to: (NAME . ITS-DIRECTORY), or nil.
+Read from the `name' of the [package] table of the nearest Cargo.toml;
+never by running cargo.  A manifest without a package, such as the root
+of a workspace, is not one."
+  (when-let* ((home (locate-dominating-file directory "Cargo.toml")))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "Cargo.toml" home))
+      (when (and (re-search-forward "^\\[package\\]" nil t)
+                 (re-search-forward
+                  "^\\(?:\\[\\|name[ \t]*=[ \t]*\"\\([^\"\n]+\\)\"\\)" nil t)
+                 (match-string 1))
+        (cons (match-string 1) (file-name-as-directory (expand-file-name home)))))))
+
+(defun mega-debug--cargo-binary (root &optional directory)
+  "The debug binary of the Cargo package DIRECTORY is in, or nil.
+ROOT is the root of the project; DIRECTORY is by default where the
+current buffer is, if that is inside ROOT, else ROOT.  A workspace
+builds every package into one `target' at its root, a lone package into
+its own: whichever holds the binary is taken, the root's if neither does."
+  (when-let* ((package (mega-debug--cargo-package
+                        (or directory
+                            (and (file-in-directory-p default-directory root)
+                                 default-directory)
+                            root))))
+    (let ((candidates
+           (mapcar (lambda (home)
+                     (expand-file-name (concat "target/debug/" (car package)) home))
+                   (list root (cdr package)))))
+      (or (seq-find #'file-exists-p candidates) (car candidates)))))
 
 (defun mega-debug-default-target (language root)
   "The likeliest thing to debug for LANGUAGE in the project at ROOT, or nil."
@@ -195,15 +258,13 @@ a prefix argument CHOOSE, or when it cannot guess, it asks which."
   (let* ((root (file-name-as-directory
                 (expand-file-name (or (mega-project-root) default-directory))))
          (language (mega-debug-language root))
-         (adapter (mega-debug-adapter language root))
-         (entry (mega-debug-choose language root)))
+         (plan (mega-debug-plan language root)))
     (when (or (mega-debug-running-p) (mega-debug--adapter-running-p))
       (user-error "A debugger is already running (C-c g q stops it)"))
-    (unless (or adapter entry)
+    (unless plan
       (user-error "No debugger for this is installed (tried: %s)"
-                  (mapconcat (lambda (name)
-                               (plist-get (cdr (assq name mega-debuggers)) :program))
-                             (cdr (assq language mega-debug-languages)) ", ")))
+                  (mapconcat (lambda (entry) (plist-get (cdr entry) :program))
+                             (mega-debug-candidates language) ", ")))
     (unless (mega-trust-p root t "debug its program")
       (user-error "This project is not trusted; see M-x mega-trust-project"))
     (let* ((guess (mega-debug-default-target language root))
@@ -212,9 +273,9 @@ a prefix argument CHOOSE, or when it cannot guess, it asks which."
                      (mega-debug--read-target language root)))
            (default-directory root))
       (setf (alist-get root mega-debug--targets nil nil #'equal) target)
-      (if adapter
-          (mega-dap-start adapter target root)
-        (let ((command (mega-debug-command entry target root)))
+      (if (eq (car plan) 'dap)
+          (mega-dap-start (cdr plan) target root language)
+        (let ((command (mega-debug-command (cdr plan) target root)))
           (funcall (car command) (cdr command)))))))
 
 ;;;; File names from inside a container
@@ -349,10 +410,12 @@ debugger that starts its program at once, as pdb does, continues it."
     (let ((path (mega-exe-p (plist-get (cdr entry) :program))))
       (mega-doctor-row (symbol-name (car entry)) (or path "not found")
                        (unless path 'shadow))))
+  (mega-doctor-row "preferred"
+                   (mapconcat #'symbol-name mega-debug-prefer ", then "))
   (mega-doctor-row "in a container"
                    (pcase mega-debug-backend
-                     ('gud "gdb's plain console")
-                     (_ "stack and variables, with gdb 14 or newer there")))
+                     ('gud "the debugger's console")
+                     (_ "stack and variables, with lldb-dap or gdb 14+ there")))
   (mega-doctor-row "debuginfod"
                    (pcase gdb-debuginfod-enable-setting
                      ('nil "off: gdb fetches nothing from the network")

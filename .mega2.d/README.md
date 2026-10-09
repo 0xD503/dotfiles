@@ -60,11 +60,12 @@ nil)` in `local.el` gives the mouse back to the terminal.
 **The completion menu** appears as you type. `TAB` takes a candidate, `C-n` /
 `C-p` choose, `C-g` closes it; nothing is ever inserted unasked.
 
-**The debugger** follows the program through your files. On this machine it
-is Emacs's own gdb interface (`M-x gdb-many-windows` adds the stack and the
-variables). In a dev container MEGA shows those itself, in a window below,
-and `C-c g b` sets breakpoints before you start; that needs gdb 14 or newer
-in the container.
+**The debugger** follows the program through your files. Where both are
+installed, lldb is used before gdb (`mega-debug-prefer` in `local.el` turns
+that round). On this machine it is Emacs's own interface to the debugger. In
+a dev container MEGA shows the stack and the variables itself, in a window
+below, and `C-c g b` sets breakpoints before you start; that needs lldb's
+adapter (`lldb-dap`) or gdb 14 or newer in the container.
 
 **In the search prompt**, `C-o ?` shows the settings and `C-o` plus a letter
 changes one (`c` case, `u` untracked files, `h` hidden, `w` whole words, `e`
@@ -81,7 +82,7 @@ Everything outside Emacs is optional: without it the feature stays quiet and
 | Fast search | `rg` (else `git grep`, else `grep`) |
 | Go to definition, rename, problems as you type | the language's server, e.g. `rust-analyzer`, `clangd` |
 | Format on save | the language's formatter, e.g. `rustfmt`, `clang-format`, `ruff` |
-| Debugging | `gdb` or `lldb`; Python brings `pdb` |
+| Debugging | `lldb` or `gdb`; Python brings `pdb` |
 | Dev containers | `podman` or `docker`; the `devcontainer` CLI if you have it |
 | Claude | the `claude` program, signed in |
 
@@ -137,8 +138,15 @@ programs it found, and whether the promises above are really in force.
 `M-x mega-keys-mode` turns every MEGA key off, leaving stock Emacs. On an
 Emacs older than 31.1 MEGA configures nothing and says so.
 
-## Tests
+## Tests and timings
 
 ```sh
-tests/test_mega2.sh      # from the dotfiles repo; runs in a sandbox
+tests/test_mega2.sh          # from the dotfiles repo; runs in a sandbox
+tests/test_mega2.sh bench    # only the timings
 ```
+
+The `bench` stage times what you wait for (a keystroke, the completion menu,
+finding a file, a search, a save, the undo tree) and prints each time next to
+its budget. Before a change that might cost time, keep a run with
+`MEGA_BENCH_SAVE=before.eld`; afterwards `MEGA_BENCH_COMPARE=before.eld`
+fails on anything that became twice as slow.

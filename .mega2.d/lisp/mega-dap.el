@@ -3,11 +3,12 @@
 ;;; Commentary:
 
 ;; A debug adapter is a debugger that talks in messages instead of in a
-;; terminal: "stopped at this line", "these are the local variables".  gdb
-;; has been one since version 14 (`gdb -i=dap').  That matters most where a
-;; terminal is awkward: inside a dev container.  There Emacs's own gdb
-;; interface can only show a console; through the adapter MEGA shows the
-;; line, the stack and the variables.
+;; terminal: "stopped at this line", "these are the local variables".  lldb
+;; comes with one (lldb-dap), and gdb has been one since version 14
+;; (`gdb -i=dap').  That matters most where a terminal is awkward: inside a
+;; dev container.  There Emacs's own debugger interface can only show a
+;; console; through the adapter MEGA shows the line, the stack and the
+;; variables.
 ;;
 ;; You do not call anything here by name.  The debugger keys of
 ;; mega-debug.el (C-c g ...) use it when `mega-debug-backend' says so, which
@@ -53,17 +54,29 @@
   :group 'mega)
 
 (defvar mega-dap-adapters
-  '((rust-gdb :command ("rust-gdb" "-i=dap") :version ("rust-gdb" "--version") :minimum 14)
-    (gdb      :command ("gdb" "-i=dap")      :version ("gdb" "--version")      :minimum 14))
+  '((lldb-dap :family lldb
+              ;; Distributions install it under its version number.
+              :programs ("lldb-dap" "lldb-dap-22" "lldb-dap-21" "lldb-dap-20"
+                         "lldb-dap-19" "lldb-dap-18" "lldb-vscode")
+              :launch mega-dap-lldb-launch)
+    (rust-gdb :family gdb :programs ("rust-gdb") :arguments ("-i=dap")
+              :version ("--version") :minimum 14)
+    (gdb      :family gdb :programs ("gdb") :arguments ("-i=dap")
+              :version ("--version") :minimum 14))
   "The debug adapters MEGA can start: (NAME PROPERTY VALUE...).
-:command is the argument list that starts one talking on its standard
-input and output.  :version, with :minimum, is a command whose first
-line of output must hold a version number at least that large.")
+:programs are the names the adapter may be installed under; the first
+that exists is run, with :arguments, and talks on its standard input and
+output.  :family is the debugger behind it, for the caller's preference.
+With :version and :minimum, the program is asked for its version with
+those arguments, and the first line of the answer must end in a version
+number at least that large.  :launch, if given, is a function of the
+language and the project root returning more arguments, a plist, for the
+request that starts the program.")
 
 (defvar mega-dap-languages
-  '((rust rust-gdb gdb)
-    (native gdb))
-  "Which adapters to try for a language, in order: (LANGUAGE NAME...).")
+  '((rust lldb-dap rust-gdb gdb)
+    (native lldb-dap gdb))
+  "Which adapters suit a language: (LANGUAGE NAME...).")
 
 ;;;; The wire
 
@@ -239,7 +252,8 @@ THEN, if given, is called with the body of the answer when it succeeded."
 
 (defun mega-dap--note (text)
   "Add TEXT to what the program and the debugger have printed."
-  (dolist (line (split-string text "\n" t))
+  ;; A program run in a terminal of the debugger's ends its lines with both.
+  (dolist (line (split-string text "\r?\n" t))
     (push line mega-dap--output))
   (when (nthcdr 500 mega-dap--output)
     (setcdr (nthcdr 499 mega-dap--output) nil)))
@@ -302,7 +316,11 @@ THEN, if given, is called with the body of the answer when it succeeded."
      (mega-dap--hide-line)
      (mega-dap--refresh))
     ("output"
+     ;; Not its banner, not what it reports for its makers, and nothing
+     ;; once it has been told to go: what an adapter prints while shutting
+     ;; down is about itself, and lldb's prints a page when it crashes there.
      (unless (or (not mega-dap--greeted)
+                 (eq mega-dap--state 'ending)
                  (equal (plist-get body :category) "telemetry"))
        (mega-dap--note (or (plist-get body :output) ""))
        (mega-dap--refresh)))
@@ -456,47 +474,112 @@ SELECTED the index of the frame shown; LOCALS are its variables, as
 ;;;; Which adapter
 
 (defvar mega-dap--usable (make-hash-table :test #'equal)
-  "Whether an adapter was found usable: (CONTEXT-NAME . ADAPTER) -> yes or no.")
+  "What was found out about an adapter where a project's tools run.
+The key is (CONTEXT-NAME . ADAPTER); the value is the name of the
+program to run, or `no' if the adapter is missing or too old.")
 
-(defun mega-dap--usable-p (entry root)
-  "Non-nil if the adapter ENTRY exists and is new enough for the project at ROOT."
+(defun mega-dap--new-enough-p (program properties root)
+  "Non-nil if PROGRAM is as new as PROPERTIES, those of its adapter, require.
+It is asked where the tools of ROOT run."
+  (or (not (plist-get properties :minimum))
+      (let* ((result (mega-exec-run program (plist-get properties :version)
+                                    :directory root :timeout 10))
+             (line (car (split-string (plist-get result :output) "\n"))))
+        (and (string-match "\\([0-9]+\\)\\.[0-9]+[^ ]*\\'" (or line ""))
+             (>= (string-to-number (match-string 1 line))
+                 (plist-get properties :minimum))))))
+
+(defun mega-dap-program (entry root)
+  "The program to run for the adapter ENTRY in the project at ROOT, or nil.
+Nil means it is not installed there, or too old.  Remembered."
   (let* ((properties (cdr entry))
          (key (cons (plist-get (mega-exec-context root) :name) (car entry)))
          (known (gethash key mega-dap--usable)))
     (unless known
       (setq known
-            (if (and (mega-exec-find (car (plist-get properties :command)) root)
-                     (or (not (plist-get properties :minimum))
-                         (let* ((version (plist-get properties :version))
-                                (result (mega-exec-run (car version) (cdr version)
-                                                       :directory root :timeout 10))
-                                (line (car (split-string (plist-get result :output) "\n"))))
-                           (and (string-match "\\([0-9]+\\)\\.[0-9]+[^ ]*\\'" (or line ""))
-                                (>= (string-to-number (match-string 1 line))
-                                    (plist-get properties :minimum))))))
-                'yes
-              'no))
+            (or (seq-find (lambda (program)
+                            (and (mega-exec-find program root)
+                                 (mega-dap--new-enough-p program properties root)))
+                          (plist-get properties :programs))
+                'no))
       (puthash key known mega-dap--usable))
-    (eq known 'yes)))
+    (and (stringp known) known)))
 
-(defun mega-dap-choose (language root)
-  "The first adapter for LANGUAGE usable where the tools of ROOT run, or nil."
-  (seq-some (lambda (name)
-              (let ((entry (assq name mega-dap-adapters)))
-                (and entry (mega-dap--usable-p entry root) entry)))
-            (cdr (assq language mega-dap-languages))))
+(defun mega-dap-choose (language root &optional prefer)
+  "The adapter for LANGUAGE usable where the tools of ROOT run, or nil.
+PREFER is a list of families, the best first: adapters of an earlier
+family are tried before those of a later one."
+  (let ((rank (lambda (name)
+                (or (seq-position prefer (plist-get (cdr (assq name mega-dap-adapters))
+                                                    :family))
+                    (length prefer)))))
+    (seq-some (lambda (name)
+                (let ((entry (assq name mega-dap-adapters)))
+                  (and entry (mega-dap-program entry root) entry)))
+              (sort (copy-sequence (cdr (assq language mega-dap-languages)))
+                    (lambda (a b) (< (funcall rank a) (funcall rank b)))))))
+
+;;;; What an adapter needs to be told
+
+(defvar mega-dap--rust-support (make-hash-table :test #'equal)
+  "The commands that teach lldb about Rust, by context name; `no' if none.")
+
+(defun mega-dap--rust-support (root)
+  "The lldb commands that make Rust values readable, where ROOT's tools run.
+They are the ones `rust-lldb' gives lldb: load the scripts Rust ships
+beside its compiler.  Where they are is asked of `rustc', and only those
+that exist are named; which do has changed between versions of Rust."
+  (let* ((key (plist-get (mega-exec-context root) :name))
+         (known (gethash key mega-dap--rust-support)))
+    (unless known
+      (setq known
+            (or (and (mega-exec-find "rustc" root)
+                     (let* ((result (mega-exec-run "rustc" '("--print" "sysroot")
+                                                   :directory root :timeout 10))
+                            (sysroot (string-trim (plist-get result :output)))
+                            (directory (concat sysroot "/lib/rustlib/etc/"))
+                            (there (lambda (name)
+                                     (eql 0 (plist-get
+                                             (mega-exec-run "test"
+                                                            (list "-f" (concat directory name))
+                                                            :directory root :timeout 10)
+                                             :status)))))
+                       (and (eql (plist-get result :status) 0)
+                            (not (string-empty-p sysroot))
+                            (funcall there "lldb_lookup.py")
+                            (append
+                             (list (format "command script import \"%slldb_lookup.py\""
+                                           directory))
+                             (and (funcall there "lldb_commands")
+                                  (list (format "command source -s 0 \"%slldb_commands\""
+                                                directory)))))))
+                'no))
+      (puthash key known mega-dap--rust-support))
+    (and (consp known) known)))
+
+(defun mega-dap-lldb-launch (language root)
+  "What lldb's adapter is told besides the program, for LANGUAGE at ROOT.
+For Rust, the commands that make a String show as its text and a Vec as
+its elements rather than as pointers."
+  (when (eq language 'rust)
+    (when-let* ((commands (mega-dap--rust-support root)))
+      (list :initCommands (vconcat commands)))))
 
 ;;;; Starting and stopping
 
-(defun mega-dap-start (entry target root)
-  "Start the adapter ENTRY on the program TARGET for the project at ROOT."
+(defun mega-dap-start (entry target root &optional language)
+  "Start the adapter ENTRY on the program TARGET for the project at ROOT.
+LANGUAGE, a key of `mega-dap-languages', is what TARGET is written in."
   (when (mega-dap-active-p)
     (user-error "A debugger is already running (C-c g q stops it)"))
   (mega-dap--end)
   (let* ((default-directory root)
-         (command (mega-exec-command (car (plist-get (cdr entry) :command))
-                                     (cdr (plist-get (cdr entry) :command))
-                                     root))
+         (properties (cdr entry))
+         (program (or (mega-dap-program entry root)
+                      (user-error "%s is not installed, or too old" (car entry))))
+         (command (mega-exec-command program (plist-get properties :arguments) root))
+         (extra (and (plist-get properties :launch)
+                     (funcall (plist-get properties :launch) language root)))
          (errors (generate-new-buffer " *mega-dap-stderr*" t))
          (buffer (generate-new-buffer " *mega-dap*" t)))
     (with-current-buffer buffer (set-buffer-multibyte nil))
@@ -532,9 +615,10 @@ SELECTED the index of the frame shown; LOCALS are its variables, as
        ;; been sent, which the "initialized" event asks for: do not wait.
        (mega-dap--request
         "launch"
-        (list :program (mega-dap--inside target)
-              :cwd (directory-file-name (mega-dap--inside root))
-              :args [])
+        (append (list :program (mega-dap--inside target)
+                      :cwd (directory-file-name (mega-dap--inside root))
+                      :args [])
+                extra)
         (lambda (_) (when (eq mega-dap--state 'starting)
                       (setq mega-dap--state 'running)
                       (mega-dap--refresh))))))))

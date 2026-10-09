@@ -235,6 +235,18 @@ VERSION is the first line `gdb --version' prints, or nil for no gdb."
   (mega-dap-test--with-gdb "GNU gdb (GDB) 16.3"
     (should-not (mega-dap-choose 'python dir))))
 
+(ert-deftest mega-dap-lldb-is-found-under-the-name-a-distribution-gives-it ()
+  (mega-dap-test--with-gdb "GNU gdb (GDB) 16.3"
+    (set-file-modes (mega-test-write (expand-file-name "bin/lldb-dap-19" dir)
+                                     "#!/bin/sh" "")
+                    #o755)
+    (let ((entry (assq 'lldb-dap mega-dap-adapters)))
+      (should (equal (mega-dap-program entry dir) "lldb-dap-19")))
+    ;; With both there, the family you prefer decides.
+    (should (eq (car (mega-dap-choose 'native dir '(lldb gdb))) 'lldb-dap))
+    (should (eq (car (mega-dap-choose 'rust dir '(lldb gdb))) 'lldb-dap))
+    (should (eq (car (mega-dap-choose 'native dir '(gdb lldb))) 'gdb))))
+
 (ert-deftest mega-dap-the-version-is-asked-once ()
   (mega-dap-test--with-gdb "GNU gdb (GDB) 16.3"
     (should (mega-dap-choose 'native dir))
@@ -253,7 +265,8 @@ LOG is the file the adapter writes the requests it receives to."
             (process-environment (cons (concat "MEGA_FAKE_DAP_LOG=" log)
                                        process-environment))
             (mega-dap-adapters
-             (list (list 'fake :command (list "python3" mega-dap-test-adapter))))
+             (list (list 'fake :programs '("python3")
+                         :arguments (list mega-dap-test-adapter))))
             (mega-dap-languages '((native fake)))
             (mega-dap--usable (make-hash-table :test #'equal))
             (mega-dap--pending (make-hash-table))
@@ -490,7 +503,8 @@ LOG is the file the adapter writes the requests it receives to."
 
 (ert-deftest mega-dap-an-adapter-that-dies-ends-the-session-quietly ()
   (mega-dap-test--session
-    (let ((mega-dap-adapters '((fake :command ("sh" "-c" "cat > /dev/null; exit 3")))))
+    (let ((mega-dap-adapters '((fake :programs ("sh")
+                                     :arguments ("-c" "cat > /dev/null; exit 3")))))
       (mega-dap-start (assq 'fake mega-dap-adapters) (expand-file-name "prog" dir) dir)
       (delete-process mega-dap--process)
       (should (mega-test-wait-for (lambda () (null mega-dap--state)) 20))
@@ -507,6 +521,88 @@ LOG is the file the adapter writes the requests it receives to."
                            :message "not now"))
       (mega-dap--receive '(:type "who-knows"))
       (should (member "next failed: not now" mega-dap--output)))))
+
+;;;; lldb's adapter, which behaves differently in every detail that matters
+
+(ert-deftest mega-dap-a-session-with-lldb-runs-from-breakpoint-to-end ()
+  (skip-unless (executable-find "python3"))
+  (mega-dap-test--session
+    (let ((process-environment (cons "MEGA_FAKE_DAP_STYLE=lldb" process-environment)))
+      ;; It says "initialized" only after `launch'; nothing may wait for it.
+      (mega-dap-test--start dir)
+      (should (equal (take 4 (mega-dap-test--commands log))
+                     '("initialize" "launch" "setBreakpoints" "configurationDone")))
+      (should (equal (mega-dap-test--arrow-line) (cons file 5)))
+      (should (equal mega-dap--locals '(("x" . "3"))))
+      (should (= mega-dap--thread 20))
+      ;; It announces a step before it answers the request for one.
+      (mega-dap-do 'next)
+      (should (mega-test-wait-for (lambda () (and (eq mega-dap--state 'stopped)
+                                                  mega-dap--locals
+                                                  (equal (mega-dap-test--arrow-line)
+                                                         (cons file 6))))
+                                  20))
+      (let ((process mega-dap--process))
+        (mega-dap-do 'continue)
+        (should (mega-test-wait-for (lambda () (null mega-dap--state)) 20))
+        (should-not (process-live-p process)))
+      ;; The program's line, without the carriage return it came with.
+      (should (member "9" mega-dap--output))
+      (should-not (seq-some (lambda (line) (string-search "\r" line)) mega-dap--output))
+      (should (member "Process 20 exited with status = 0 (0x00000000) " mega-dap--output))
+      ;; It crashes when told to go, and says so at length: not your concern.
+      (should-not (seq-some (lambda (line)
+                              (string-match-p "invalid pointer\\|bug report" line))
+                            mega-dap--output)))))
+
+(ert-deftest mega-dap-rust-values-are-readable-with-lldb ()
+  "lldb is given the commands `rust-lldb' gives it, where Rust has them."
+  (mega-test-with-directory dir
+    (let* ((bin (expand-file-name "bin/" dir))
+           (sysroot (expand-file-name "toolchain" dir))
+           (support (concat sysroot "/lib/rustlib/etc/"))
+           (exec-path (list bin "/usr/bin" "/bin"))
+           (process-environment (cons (concat "PATH=" bin ":/usr/bin:/bin")
+                                      process-environment))
+           (mega--exe-cache (make-hash-table :test #'equal))
+           (mega-dap--rust-support (make-hash-table :test #'equal))
+           (mega-exec-context-functions nil))
+      (set-file-modes (mega-test-write (expand-file-name "rustc" bin)
+                                       "#!/bin/sh" (format "echo '%s'" sysroot) "")
+                      #o755)
+      ;; A Rust without the scripts: nothing is made up.
+      (should-not (mega-dap-lldb-launch 'rust dir))
+      (clrhash mega-dap--rust-support)
+      (mega-test-write (concat support "lldb_lookup.py") "")
+      (let ((import (format "command script import \"%slldb_lookup.py\"" support))
+            (source (format "command source -s 0 \"%slldb_commands\"" support)))
+        ;; Newer Rust ships one script, older Rust two: name what is there.
+        (should (equal (mega-dap-lldb-launch 'rust dir)
+                       (list :initCommands (vector import))))
+        (clrhash mega-dap--rust-support)
+        (mega-test-write (concat support "lldb_commands") "")
+        (should (equal (mega-dap-lldb-launch 'rust dir)
+                       (list :initCommands (vector import source)))))
+      ;; Only for Rust.
+      (should-not (mega-dap-lldb-launch 'native dir)))))
+
+(ert-deftest mega-dap-what-an-adapter-needs-besides-the-program-is-sent ()
+  (skip-unless (executable-find "python3"))
+  (mega-dap-test--session
+    (let ((mega-dap-adapters
+           (list (list 'fake :programs '("python3")
+                       :arguments (list mega-dap-test-adapter)
+                       :launch (lambda (language _root)
+                                 (list :initCommands (vector (format "for %s" language))))))))
+      (mega-dap-start (assq 'fake mega-dap-adapters) (expand-file-name "prog" dir) dir 'rust)
+      (should (mega-test-wait-for (lambda () (eq mega-dap--state 'stopped)) 20))
+      (let ((launch (seq-find (lambda (request)
+                                (equal (plist-get request :command) "launch"))
+                              (mega-dap-test--requests log))))
+        (should (equal (plist-get (plist-get launch :arguments) :initCommands)
+                       '("for rust")))
+        (should (equal (plist-get (plist-get launch :arguments) :program)
+                       (expand-file-name "prog" dir)))))))
 
 ;;;; In a container
 
@@ -582,7 +678,8 @@ CONTAINER is a context function that puts the project in a container."
   (mega-dap-test--project
     (let (started)
       (cl-letf (((symbol-function 'mega-dap-start)
-                 (lambda (entry target root) (setq started (list 'dap (car entry) target root))))
+                 (lambda (entry target root &rest _)
+                   (setq started (list 'dap (car entry) target root))))
                 ((symbol-function 'gdb)
                  (lambda (line) (setq started (list 'gud line))))
                 ((symbol-function 'gud-gdb)
@@ -601,6 +698,41 @@ CONTAINER is a context function that puts the project in a container."
         (let ((mega-debug-backend 'dap))
           (with-temp-buffer (mega-debug))
           (should (eq (car started) 'dap)))))))
+
+(ert-deftest mega-dap-the-debugger-you-prefer-outranks-the-better-interface ()
+  "With lldb there but only gdb as an adapter, lldb is used, as a console."
+  (mega-dap-test--project
+    (let* ((started nil)
+           (has (lambda (programs)
+                  (lambda (directory)
+                    (when (file-in-directory-p directory dir)
+                      (list :kind 'container :name (format "box-%s" programs)
+                            :wrap (lambda (program args _where) (cons program args))
+                            :find (lambda (program) (member program programs))
+                            :to-inside #'identity :to-host #'identity))))))
+      (cl-letf (((symbol-function 'mega-dap-start)
+                 (lambda (entry &rest _) (setq started (list 'dap (car entry)))))
+                ((symbol-function 'lldb)
+                 (lambda (line) (setq started (list 'gud 'lldb line))))
+                ((symbol-function 'gud-gdb)
+                 (lambda (line) (setq started (list 'gud 'gdb line)))))
+        ;; gdb can be an adapter, lldb is only a console: lldb, as preferred.
+        (let ((mega-exec-context-functions (list (funcall has '("gdb" "lldb")))))
+          (with-temp-buffer (mega-debug))
+          (should (equal (take 2 started) '(gud lldb)))
+          ;; Prefer gdb, and its adapter is used.
+          (let ((mega-debug-prefer '(gdb lldb)))
+            (with-temp-buffer (mega-debug))
+            (should (equal started '(dap gdb))))
+          ;; Insist on an adapter, and the one there is, is used.
+          (let ((mega-debug-backend 'dap))
+            (with-temp-buffer (mega-debug))
+            (should (equal started '(dap gdb)))))
+        ;; lldb with its adapter: the preferred debugger, the better interface.
+        (let ((mega-exec-context-functions
+               (list (funcall has '("gdb" "lldb" "lldb-dap-19")))))
+          (with-temp-buffer (mega-debug))
+          (should (equal started '(dap lldb-dap))))))))
 
 (ert-deftest mega-dap-an-old-gdb-in-a-container-falls-back-to-its-console ()
   (mega-dap-test--project
