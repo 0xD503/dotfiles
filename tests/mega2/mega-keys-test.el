@@ -9,16 +9,23 @@
   (apply #'append (mapcar #'cdr mega-keys)))
 
 (defun mega-keys-test--bound (map &optional prefix)
-  "Every (KEY-DESCRIPTION . COMMAND) reachable in MAP, below PREFIX."
+  "Every (KEY-DESCRIPTION . COMMAND) reachable in MAP, below PREFIX.
+A prefix that is bound to a named keymap counts as one binding: what is
+inside belongs to whoever owns that keymap."
   (let (found)
     (map-keymap
      (lambda (event binding)
        (let ((key (vconcat prefix (vector event))))
-         (if (keymapp binding)
+         (if (and (keymapp binding) (not (symbolp binding)))
              (setq found (append (mega-keys-test--bound binding key) found))
            (push (cons (key-description key) binding) found))))
      map)
     found))
+
+(defun mega-keys-test--runnable-p (binding)
+  "Non-nil if BINDING is a command or names a keymap."
+  (or (commandp binding)
+      (and (symbolp binding) (fboundp binding) (keymapp (symbol-function binding)))))
 
 (ert-deftest mega-keys-the-mode-is-on ()
   (should mega-keys-mode)
@@ -58,7 +65,16 @@
 
 (ert-deftest mega-keys-every-command-exists ()
   (dolist (row (mega-keys-test--rows))
-    (should (commandp (nth 1 row)))))
+    (should (mega-keys-test--runnable-p (nth 1 row)))))
+
+(ert-deftest mega-keys-the-find-keys-of-mega-1-keep-their-meaning ()
+  (should (eq (lookup-key mega-keys-mode-map (kbd "M-g a")) #'mega-search-project))
+  (should (eq (lookup-key mega-keys-mode-map (kbd "M-g s")) #'mega-search-symbol))
+  (should (eq (lookup-key mega-keys-mode-map (kbd "C-c t")) #'mega-project-tree))
+  ;; C-c p is the whole project map, as it was; f still finds a file.
+  (should (eq (lookup-key mega-keys-mode-map (kbd "C-c p")) 'mega-project-map))
+  (should (eq (key-binding (kbd "C-c p f")) #'project-find-file))
+  (should (eq (key-binding (kbd "C-c p p")) #'project-switch-project)))
 
 (ert-deftest mega-keys-the-keys-win-over-a-major-mode ()
   "They live in a minor-mode map, so no major mode can shadow them."
@@ -120,7 +136,7 @@
           (setq count (1+ count))
           (if (string-prefix-p "M-x " key)
               (should (commandp (intern (substring key 4))))
-            (should (commandp (key-binding (kbd key))))))))
+            (should (mega-keys-test--runnable-p (key-binding (kbd key))))))))
     (should (> count 5))))
 
 (provide 'mega-keys-test)

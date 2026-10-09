@@ -188,8 +188,14 @@
                 (expand-file-name "init.el" mega-dir))))
 
 (defun mega-lib-test--setq-variables (form)
-  "Every variable assigned with a plain `setq' anywhere in FORM."
-  (when (consp form)
+  "Every variable a plain `setq' assigns while FORM is being loaded.
+Function bodies are left out: a `setq' there runs later, in a buffer the
+function chose, which is what a buffer-local variable is for."
+  (when (and (consp form)
+             (not (memq (car form)
+                        '(defun defmacro defsubst cl-defun lambda function quote
+                          define-minor-mode define-derived-mode defvar defconst
+                          defcustom defface defalias))))
     (append (when (eq (car form) 'setq)
               (let ((rest (cdr form)) variables)
                 (while (consp rest)
@@ -204,8 +210,8 @@
 
 (ert-deftest mega-lib-no-buffer-local-variable-is-set-with-plain-setq ()
   "A variable that becomes buffer-local when set needs `setq-default'.
-Plain `setq' on one changes only the buffer that is current during
-startup, so the setting silently does nothing anywhere else."
+Plain `setq' on one while a file loads changes only the buffer that is
+current during startup, so the setting silently does nothing elsewhere."
   (let ((count 0))
     (dolist (file (mega-lib-test--source-files))
       (with-temp-buffer

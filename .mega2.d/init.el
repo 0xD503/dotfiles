@@ -56,7 +56,22 @@
   '(mega-core        ; encoding, files, safety, privacy, security
     mega-ui          ; theme, modeline, line numbers, the ruler
     mega-keys        ; the single table holding every MEGA binding
+    mega-minibuffer  ; the vertical, fuzzy list every prompt uses
     mega-session     ; history, recent files, places
+    mega-project     ; projects, remembering them, the file tree
+    mega-workspace   ; files and windows put away and brought back
+    mega-home        ; the page Emacs opens on
+    mega-exec        ; the one way MEGA runs a program
+    mega-popup       ; a small window that floats over the text
+    mega-complete    ; the completion menu
+    mega-lsp         ; the language server, diagnostics, documentation
+    mega-lang        ; the language table, and which mode a file gets
+    ;; Loaded on first use.
+    (mega-pick)      ; a prompt whose choices come from a program
+    (mega-search :commands (mega-search-project mega-search-symbol))
+    (mega-mode-simple)                 ; what MEGA's own modes share
+    (mega-mode-rust)  (mega-mode-zig)  ; entered through mega-lang's table
+    (mega-mode-just)  (mega-mode-markdown)
     (mega-help   :commands (mega-help))
     (mega-doctor :commands (mega-doctor)))
   "Modules MEGA consists of, in load order.

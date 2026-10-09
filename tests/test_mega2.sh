@@ -182,23 +182,39 @@ terminal_run() {
         unset COLORTERM
     fi
 
+    # MEGA_TEST_FILE, when set by the caller, is a file to start Emacs on.
+    MEGA_TEST_FILE=${MEGA_TEST_FILE-}
+    export MEGA_TEST_FILE
+    [ -z "$MEGA_TEST_FILE" ] || label="$label, given a file"
     if [ "$T_LAUNCHER" = chemacs ]; then
-        launch='exec "$T_EMACS" -nw -l "$T_PROBE"'
+        launch='exec "$T_EMACS" -nw -l "$T_PROBE" ${MEGA_TEST_FILE:+"$MEGA_TEST_FILE"}'
     else
-        launch='exec "$T_EMACS" -nw --init-directory "$MEGA_TEST_CONFIG" -l "$T_PROBE"'
+        launch='exec "$T_EMACS" -nw --init-directory "$MEGA_TEST_CONFIG" -l "$T_PROBE" ${MEGA_TEST_FILE:+"$MEGA_TEST_FILE"}'
     fi
     printf '#!/bin/sh\nstty rows 40 cols 120\n%s\n' "$launch" > "$SANDBOX/launch.sh"
 
     # A session that never exits (a prompt, a hang) must fail, not block.
     limit=
     command -v timeout >/dev/null 2>&1 && limit='timeout 120'
+    # What the terminal was sent is kept: it is the only proof that a popup
+    # was really drawn, not merely created.  The probe completes "megapr" and
+    # takes megaprobealpha; "bebeta" is the tail of the candidate it did not
+    # take, so it can only have come from the menu.  (The start of each
+    # candidate is drawn in another colour, which splits it on the wire.)
     TERM=$T_TERM $limit \
-        script -qec "sh '$SANDBOX/launch.sh'" /dev/null > /dev/null 2>&1 < /dev/null
+        script -qec "sh '$SANDBOX/launch.sh'" "$SANDBOX/screen" > /dev/null 2>&1 < /dev/null
     rc=$?
+    if [ "$T_EXPECT" = supported ] && [ -f "$MEGA_TEST_REPORT" ] &&
+        ! grep -q 'bebeta' "$SANDBOX/screen"; then
+        printf 'problem: the completion menu was never drawn on the terminal\n' \
+            >> "$MEGA_TEST_REPORT"
+        rc=1
+    fi
 
     if [ ! -f "$MEGA_TEST_REPORT" ]; then
         bad "$label: no report (exit $rc); Emacs did not finish starting"
-    elif [ "$rc" -ne 0 ] || ! grep -q '^verdict=ok$' "$MEGA_TEST_REPORT"; then
+    elif [ "$rc" -ne 0 ] || ! grep -q '^verdict=ok$' "$MEGA_TEST_REPORT" ||
+        grep -q '^problem:' "$MEGA_TEST_REPORT"; then
         bad "$label"
         cut -c1-400 "$MEGA_TEST_REPORT" | detail
     else
@@ -223,6 +239,12 @@ stage_terminal() {
     # With fewer colours: 256 gets an approximated theme, 8 gets none.
     terminal_run "$EMACS" xterm-256color 256 supported
     terminal_run "$EMACS" xterm 8 supported
+
+    # Started on a file: the file is shown, the home page stays away.
+    printf 'given on the command line\n' > "$SANDBOX/given.txt"
+    MEGA_TEST_FILE="$SANDBOX/given.txt"
+    terminal_run "$EMACS" xterm-256color 16777216 supported
+    MEGA_TEST_FILE=
 
     # Through chemacs2, as the default profile.  A copy of the real one is
     # put in the sandbox home; its profile list points at this checkout.

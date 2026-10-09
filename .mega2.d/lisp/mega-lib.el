@@ -24,7 +24,7 @@
 
 ;;; Code:
 
-(defconst mega-version "2.0.0-m0"
+(defconst mega-version "2.0.0-m2"
   "The MEGA version.  The suffix names the last finished milestone.")
 
 (defgroup mega nil

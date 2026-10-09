@@ -35,8 +35,174 @@ whatever buffer the selected window shows."
   (substring-no-properties
    (format-mode-line mode-line-format nil nil (current-buffer))))
 
+(defmacro mega-terminal-probe--typing (keys &rest body)
+  "Run BODY as if KEYS were typed at the prompt it opens.
+Unlike the simulated keys of the unit tests, this leaves the live
+minibuffer list on: the keys are simply waiting in the input queue."
+  (declare (indent 1))
+  `(progn
+     (setq unread-command-events (listify-key-sequence (kbd ,keys)))
+     (prog1 (progn ,@body)
+       (setq unread-command-events nil))))
+
+(defun mega-terminal-probe--navigation ()
+  "Check the prompts, the search and the file tree on the live terminal."
+  (declare-function mega-pick-read "mega-pick")
+  (declare-function mega-search-project "mega-search")
+  (declare-function mega-project-tree "mega-project")
+  (require 'mega-pick)
+  ;; The live list: RET takes the highlighted entry, not the typed text.
+  (let ((choice (mega-terminal-probe--typing "an RET"
+                  (mega-pick-read
+                   "Fruit: "
+                   (lambda (input)
+                     (seq-filter (lambda (fruit) (string-search input fruit))
+                                 '("apple" "banana" "mango")))))))
+    (unless (equal choice "banana")
+      (mega-terminal-probe--problem "the prompt returned %S, not the entry" choice)))
+  ;; Fuzzy matching in an ordinary prompt.
+  (let ((choice (mega-terminal-probe--typing "srcmn RET"
+                  (completing-read "File: " '("README.md" "src/lib.rs" "src/main.rs")))))
+    (unless (equal choice "src/main.rs")
+      (mega-terminal-probe--problem "fuzzy matching chose %S" choice)))
+  ;; A real search with a real program, from typing to landing on the line.
+  (let* ((project (file-name-as-directory
+                   (make-temp-file (expand-file-name "probe-" (getenv "MEGA_TEST_SANDBOX"))
+                                   t)))
+         (file (expand-file-name "notes.txt" project))
+         (default-directory project))
+    (with-temp-file file (insert "one\ntwo\nthe needle is here\n"))
+    (condition-case err
+        (save-window-excursion
+          (mega-terminal-probe--typing "needle RET"
+            (mega-search-project))
+          (unless (and (equal buffer-file-name file) (= (line-number-at-pos) 3))
+            (mega-terminal-probe--problem "the search ended in %S, line %s"
+                                          (or buffer-file-name (buffer-name))
+                                          (line-number-at-pos))))
+      (error (mega-terminal-probe--problem "the search failed: %S" err))))
+  ;; The file tree is a window of this frame, and goes away again.
+  (condition-case err
+      (let ((before (length (window-list))))
+        (mega-project-tree)
+        (unless (= (length (window-list)) (1+ before))
+          (mega-terminal-probe--problem "the file tree opened %s windows"
+                                        (- (length (window-list)) before)))
+        (unless (= (length (frame-list)) 1)
+          (mega-terminal-probe--problem "the file tree opened a frame"))
+        (mega-project-tree)
+        (unless (= (length (window-list)) before)
+          (mega-terminal-probe--problem "the file tree did not close")))
+    (error (mega-terminal-probe--problem "the file tree failed: %S" err))))
+
+(defun mega-terminal-probe--completion ()
+  "Check the completion menu on the live terminal: it is drawn, and TAB works.
+The text \"popup-marker\" in the report tells the runner to look for the
+menu's text in what the terminal was actually sent."
+  (declare-function mega-complete--auto "mega-complete")
+  (declare-function mega-complete-next "mega-complete")
+  (declare-function mega-complete-accept "mega-complete")
+  (declare-function mega-popup-visible-p "mega-popup")
+  (defvar mega-complete--active)
+  (defvar mega-complete-mode)
+  (condition-case err
+      (save-window-excursion
+        (unless mega-complete-mode
+          (mega-terminal-probe--problem "the completion menu is not enabled"))
+        (switch-to-buffer (get-buffer-create "mega-probe-completion"))
+        (erase-buffer)
+        (setq-local completion-at-point-functions
+                    (list (lambda ()
+                            (list (save-excursion (skip-chars-backward "a-z") (point))
+                                  (point)
+                                  '("megaprobealpha" "megaprobebeta" "other")))))
+        (insert "megapr")
+        (redisplay t)
+        (mega-complete--auto)
+        (redisplay t)
+        (unless (and mega-complete--active (mega-popup-visible-p 'complete))
+          (mega-terminal-probe--problem "the completion menu did not appear"))
+        (unless (= (length (frame-list)) 2)
+          (mega-terminal-probe--problem "%d frames with the menu open" (length (frame-list))))
+        (unless (eq (selected-window) (get-buffer-window "mega-probe-completion"))
+          (mega-terminal-probe--problem "the menu took the cursor away"))
+        ;; Shortest first: beta, then alpha.  Take the second, so that the
+        ;; word "beta" reaches the terminal only as part of the menu.
+        (mega-complete-next)
+        (mega-complete-next)
+        (redisplay t)
+        (mega-complete-accept)
+        (redisplay t)
+        (unless (equal (buffer-string) "megaprobealpha")
+          (mega-terminal-probe--problem "accepting inserted %S" (buffer-string)))
+        (when (mega-popup-visible-p 'complete)
+          (mega-terminal-probe--problem "the menu stayed after accepting"))
+        (set-buffer-modified-p nil)
+        (kill-buffer "mega-probe-completion"))
+    (error (mega-terminal-probe--problem "the completion menu failed: %S" err))))
+
+(defun mega-terminal-probe--home ()
+  "Check the home page and workspaces on the live terminal.
+MEGA_TEST_FILE names a file Emacs was started on, if any: then the page
+must stay out of the way."
+  (declare-function mega-workspace-capture "mega-workspace")
+  (declare-function mega-workspace-write "mega-workspace")
+  (declare-function mega-workspace-restore "mega-workspace")
+  (declare-function mega-home-render "mega-home")
+  (defvar mega-home-buffer)
+  (let ((given (getenv "MEGA_TEST_FILE")))
+    (if (and given (not (string= given "")))
+        (progn
+          (unless (equal (buffer-file-name (window-buffer)) (expand-file-name given))
+            (mega-terminal-probe--problem "started on a file, but showing %s"
+                                          (buffer-name (window-buffer))))
+          (when (get-buffer mega-home-buffer)
+            (mega-terminal-probe--problem "the home page opened although a file was given")))
+      (unless (equal (buffer-name (window-buffer)) mega-home-buffer)
+        (mega-terminal-probe--problem "started on %s, not the home page"
+                                      (buffer-name (window-buffer))))
+      (let ((page (with-current-buffer (mega-home-render)
+                    (buffer-substring-no-properties (point-min) (point-max)))))
+        (unless (string-match-p "started in [0-9]+ ms" page)
+          (mega-terminal-probe--problem "the home page shows no startup time: %S" page)))))
+  ;; A two-window layout survives being saved and brought back.
+  (let* ((dir (file-name-as-directory
+               (make-temp-file (expand-file-name "ws-" (getenv "MEGA_TEST_SANDBOX")) t)))
+         (a (expand-file-name "a.txt" dir))
+         (b (expand-file-name "b.txt" dir))
+         ;; The sandbox is under the temporary directory, which workspaces
+         ;; normally leave out.
+         (temporary-file-directory "/nonexistent-temporary-directory/"))
+    (with-temp-file a (insert "alpha\nbeta\n"))
+    (with-temp-file b (insert "gamma\ndelta\n"))
+    (condition-case err
+        (save-window-excursion
+          (delete-other-windows)
+          (find-file a)
+          (goto-char 7)
+          (select-window (split-window-right))
+          (find-file b)
+          (let ((workspace (mega-workspace-capture "probe")))
+            (delete-other-windows)
+            (kill-buffer (get-file-buffer a))
+            (kill-buffer (get-file-buffer b))
+            (switch-to-buffer "*scratch*")
+            (mega-workspace-restore workspace)
+            (let ((shown (sort (mapcar (lambda (window)
+                                         (buffer-file-name (window-buffer window)))
+                                       (window-list))
+                               #'string<)))
+              (unless (equal shown (list a b))
+                (mega-terminal-probe--problem "the workspace came back showing %S" shown)))
+            (unless (= 7 (with-current-buffer (get-file-buffer a) (point)))
+              (mega-terminal-probe--problem "the cursor was not put back")))
+          (ignore-errors (tab-bar-close-other-tabs)))
+      (error (mega-terminal-probe--problem "workspaces failed: %S" err)))))
+
 (defun mega-terminal-probe--supported ()
   "Check a session in which MEGA is expected to be fully configured."
+  ;; First, before anything below changes what is on screen.
+  (mega-terminal-probe--home)
   (unless (bound-and-true-p mega-supported-p)
     (mega-terminal-probe--problem "MEGA refused this Emacs"))
   (when (bound-and-true-p mega-module-failures)
@@ -91,6 +257,8 @@ whatever buffer the selected window shows."
       (mega-terminal-probe--problem "the modeline does not say a buffer is narrowed")))
   (unless (eq (key-binding (kbd "C-c ?")) 'mega-help)
     (mega-terminal-probe--problem "C-c ? is %s" (key-binding (kbd "C-c ?"))))
+  (mega-terminal-probe--navigation)
+  (mega-terminal-probe--completion)
   (when (and (equal (getenv "MEGA_TEST_LAUNCHER") "chemacs")
              (not (featurep 'chemacs)))
     (mega-terminal-probe--problem "chemacs was expected to have started this session")))

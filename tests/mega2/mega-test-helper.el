@@ -64,6 +64,45 @@ Tests load more; a claim about startup has to be checked against this.")
        (with-current-buffer ,var (set-buffer-modified-p nil))
        (kill-buffer ,var))))
 
+;; Emacs switches the vertical minibuffer list off while keys are being
+;; simulated, so a batch test cannot press RET on a highlighted candidate.
+;; This stands in for the list: it asks the completion machinery — table,
+;; styles, category overrides and all — what the list would show for a given
+;; input, and "presses RET" on one entry.  The real list is exercised on a
+;; real terminal by mega-terminal-probe.el.
+
+(defvar mega-test-prompt-log nil
+  "What each scripted prompt was asked, newest first: (PROMPT . CANDIDATES).")
+
+(defmacro mega-test-with-scripted-prompt (input &rest body)
+  "Run BODY with every `completing-read' answered as if INPUT were typed.
+INPUT is a string, or a list (STRING ACTION...) whose ACTIONs are
+functions called after typing, as the keys of the prompt would be.  The
+prompt returns the first candidate offered for INPUT, or INPUT itself if
+there is none."
+  (declare (indent 1) (debug (form body)))
+  `(let* ((mega-test--script ,input)
+          (completing-read-function
+           (lambda (prompt table &optional predicate &rest _)
+             (let* ((typed (if (consp mega-test--script)
+                               (car mega-test--script)
+                             mega-test--script))
+                    (offered (lambda ()
+                               (let ((all (completion-all-completions
+                                           typed table predicate (length typed))))
+                                 (when (consp all) (setcdr (last all) nil))
+                                 all))))
+               (funcall offered)
+               (dolist (action (and (consp mega-test--script) (cdr mega-test--script)))
+                 (funcall action))
+               (let ((candidates (funcall offered)))
+                 (push (cons prompt (mapcar #'substring-no-properties candidates))
+                       mega-test-prompt-log)
+                 (if (and candidates (test-completion (car candidates) table predicate))
+                     (car candidates)
+                   typed))))))
+     ,@body))
+
 (defun mega-test-buffer-string (name)
   "The text of buffer NAME, without properties."
   (with-current-buffer name
