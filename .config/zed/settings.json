@@ -77,8 +77,10 @@
   },
   "base_keymap": "VSCode",
   "agent": {
+    "threads_sidebar": {
+      "position": "right",
+    },
     "dock": "right",
-    "sidebar_side": "right",
     "default_model": {
       "provider": "ollama",
       "model": "qwen2.5-coder:14b",
