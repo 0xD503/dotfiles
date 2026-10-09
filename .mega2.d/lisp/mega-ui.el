@@ -107,6 +107,37 @@
       show-paren-when-point-inside-paren t
       show-paren-context-when-offscreen 'overlay)
 
+;;;; The mouse, in a terminal
+;;
+;; Click to put the cursor somewhere, click in the file tree, scroll with
+;; the wheel, and see the hint of what is under the pointer in a small popup.
+;; All of it is Emacs's own.  One thing changes with it: selecting text with
+;; the terminal itself, rather than with Emacs, now needs Shift held down.
+
+(defcustom mega-mouse t
+  "Non-nil to use the mouse in a terminal.
+With it on, the terminal's own text selection needs Shift held down.
+Under tmux the mouse reaches Emacs only if tmux has `mouse on'."
+  :type 'boolean
+  :group 'mega)
+
+(defvar mouse-wheel-progressive-speed)
+(defvar mouse-wheel-scroll-amount)
+
+(setq mouse-wheel-progressive-speed nil   ; a notch is always the same distance
+      mouse-wheel-scroll-amount '(3 ((shift) . 1)))
+
+(defun mega-ui-mouse ()
+  "Switch the mouse on in a terminal, if `mega-mouse' says so."
+  (when (and mega-mouse (not (display-graphic-p)))
+    (xterm-mouse-mode 1)
+    ;; Hints in a popup need the same terminal support MEGA's own popups do.
+    (when (and (featurep 'tty-child-frames) (fboundp 'tty-tip-mode))
+      (tty-tip-mode 1))))
+
+(unless noninteractive
+  (mega-after-startup #'mega-ui-mouse))
+
 ;;;; Key hints
 ;;
 ;; which-key ships with Emacs: pause after a prefix key and it lists what can

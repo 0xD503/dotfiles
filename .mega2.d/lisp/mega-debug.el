@@ -25,10 +25,16 @@
 ;;
 ;; A debugger runs the program, so it needs a project you have trusted
 ;; (mega-trust.el), and it runs where the project's tools are: in the
-;; project's container if you joined one.  There MEGA uses gdb's plain
-;; interface rather than the full one, which needs a terminal of this
-;; machine for the program's input and output; file names the debugger
-;; reports are translated back to the files you are editing.
+;; project's container if you joined one.  File names the debugger reports
+;; are translated back to the files you are editing.
+;;
+;; In a container Emacs's full gdb interface cannot be used: it wants a
+;; terminal of this machine for the program's input and output.  MEGA talks
+;; to gdb as a debug adapter there instead (mega-dap.el), which shows the
+;; stack and the variables in a window below and lets you set breakpoints
+;; before starting.  That needs gdb 14 or newer in the container; with an
+;; older one you get gdb's plain console.  `mega-debug-backend' overrides
+;; the choice.
 ;;
 ;; Privacy: gdb can fetch missing debug information from a "debuginfod"
 ;; server, which tells that server what you are debugging.  MEGA switches
@@ -42,6 +48,12 @@
 (require 'mega-trust)
 
 (declare-function mega-project-root "mega-project")
+(declare-function mega-dap-choose "mega-dap")
+(declare-function mega-dap-start "mega-dap")
+(declare-function mega-dap-active-p "mega-dap")
+(declare-function mega-dap-do "mega-dap")
+(declare-function mega-dap-quit "mega-dap")
+(declare-function mega-dap-toggle-breakpoint "mega-dap")
 (declare-function gdb "gdb-mi")
 (declare-function gud-gdb "gud")
 (declare-function lldb "gud")
@@ -64,6 +76,24 @@
       gud-highlight-current-line t)
 
 ;;;; Which debugger
+
+(defcustom mega-debug-backend 'auto
+  "How MEGA talks to a debugger.
+`gud' is Emacs's own debugger interface; `dap' is a debug adapter, see
+mega-dap.el.  `auto' takes the adapter where the full interface cannot
+be had, which is inside a container, and Emacs's own everywhere else.
+Wherever no usable adapter is found, Emacs's own interface is used."
+  :type '(choice (const auto) (const gud) (const dap))
+  :group 'mega)
+
+(defun mega-debug-adapter (language root)
+  "The debug adapter to use for LANGUAGE in the project at ROOT, or nil.
+Nil means Emacs's own debugger interface."
+  (when (pcase mega-debug-backend
+          ('dap t)
+          ('auto (plist-get (mega-exec-context root) :wrap)))
+    (require 'mega-dap)
+    (mega-dap-choose language root)))
 
 (defvar mega-debuggers
   '((rust-gdb  :program "rust-gdb"  :arguments ("-i=mi") :start gdb
@@ -165,8 +195,11 @@ a prefix argument CHOOSE, or when it cannot guess, it asks which."
   (let* ((root (file-name-as-directory
                 (expand-file-name (or (mega-project-root) default-directory))))
          (language (mega-debug-language root))
+         (adapter (mega-debug-adapter language root))
          (entry (mega-debug-choose language root)))
-    (unless entry
+    (when (or (mega-debug-running-p) (mega-debug--adapter-running-p))
+      (user-error "A debugger is already running (C-c g q stops it)"))
+    (unless (or adapter entry)
       (user-error "No debugger for this is installed (tried: %s)"
                   (mapconcat (lambda (name)
                                (plist-get (cdr (assq name mega-debuggers)) :program))
@@ -177,10 +210,12 @@ a prefix argument CHOOSE, or when it cannot guess, it asks which."
            (target (if (and guess (not choose) (file-exists-p guess))
                        guess
                      (mega-debug--read-target language root)))
-           (command (mega-debug-command entry target root))
            (default-directory root))
       (setf (alist-get root mega-debug--targets nil nil #'equal) target)
-      (funcall (car command) (cdr command)))))
+      (if adapter
+          (mega-dap-start adapter target root)
+        (let ((command (mega-debug-command entry target root)))
+          (funcall (car command) (cdr command)))))))
 
 ;;;; File names from inside a container
 
@@ -201,13 +236,41 @@ them; the file to show is the one on this machine."
        (buffer-live-p gud-comint-buffer)
        (process-live-p (get-buffer-process gud-comint-buffer))))
 
+(defun mega-debug--adapter-running-p ()
+  "Non-nil if a debug adapter session is on."
+  (and (featurep 'mega-dap) (mega-dap-active-p)))
+
+(defconst mega-debug--actions
+  '((gud-next . next) (gud-step . step) (gud-finish . finish)
+    (gud-cont . continue) (gud-run . continue)
+    (gud-up . up) (gud-down . down) (gud-print . print))
+  "What each of Emacs's debugger commands is called in an adapter session.")
+
 (defun mega-debug--call (command argument)
-  "Run the debugger's COMMAND with ARGUMENT, if there is a debugger and it has one."
-  (unless (mega-debug-running-p)
-    (user-error "No debugger is running (C-c g g starts one)"))
-  (unless (fboundp command)
-    (user-error "This debugger cannot do that"))
-  (funcall command argument))
+  "Run the debugger's COMMAND with ARGUMENT, if there is a debugger and it has one.
+COMMAND names the command of Emacs's own interface; in an adapter
+session the action of the same meaning is done instead."
+  (cond ((mega-debug--adapter-running-p)
+         (mega-dap-do (cdr (assq command mega-debug--actions))))
+        ((not (mega-debug-running-p))
+         (user-error "No debugger is running (C-c g g starts one)"))
+        ((not (fboundp command))
+         (user-error "This debugger cannot do that"))
+        (t (funcall command argument))))
+
+(defun mega-debug--breakpoint (command argument remove)
+  "Set or, with REMOVE, remove a breakpoint on this line.
+Emacs's own interface needs a running debugger and is given COMMAND
+with ARGUMENT.  Where an adapter is or would be used, the breakpoint is
+MEGA's own and can be set at any time."
+  (cond ((mega-debug-running-p)
+         (mega-debug--call command argument))
+        ((or (mega-debug--adapter-running-p)
+             (let ((root (file-name-as-directory
+                          (expand-file-name (or (mega-project-root) default-directory)))))
+               (mega-debug-adapter (mega-debug-language root) root)))
+         (mega-dap-toggle-breakpoint remove))
+        (t (user-error "No debugger is running (C-c g g starts one)"))))
 
 (defmacro mega-debug--define (name command description)
   "Define the command NAME, which runs the debugger's COMMAND.
@@ -217,8 +280,21 @@ DESCRIPTION is its docstring."
      (interactive "p")
      (mega-debug--call ',command (or argument 1))))
 
-(mega-debug--define mega-debug-break gud-break "Set a breakpoint on this line.")
-(mega-debug--define mega-debug-remove gud-remove "Remove the breakpoint on this line.")
+;;;###autoload
+(defun mega-debug-break (&optional argument)
+  "Set a breakpoint on this line.
+In a debug adapter session, or before one, the same key takes it off
+again.  ARGUMENT is passed on to Emacs's own debugger command."
+  (interactive "p")
+  (mega-debug--breakpoint 'gud-break (or argument 1) nil))
+
+;;;###autoload
+(defun mega-debug-remove (&optional argument)
+  "Remove the breakpoint on this line.
+ARGUMENT is passed on to Emacs's own debugger command."
+  (interactive "p")
+  (mega-debug--breakpoint 'gud-remove (or argument 1) t))
+
 (mega-debug--define mega-debug-next gud-next "Run the line, stepping over calls.")
 (mega-debug--define mega-debug-step gud-step "Run the line, stepping into calls.")
 (mega-debug--define mega-debug-finish gud-finish "Run until this function returns.")
@@ -240,12 +316,14 @@ debugger that starts its program at once, as pdb does, continues it."
 (defun mega-debug-quit ()
   "Stop the debugger, and the program with it."
   (interactive)
-  (unless (mega-debug-running-p)
+  (unless (or (mega-debug-running-p) (mega-debug--adapter-running-p))
     (user-error "No debugger is running"))
   (when (y-or-n-p "Stop the debugger and the program it is running? ")
-    ;; Asked once, above; not a second time by the buffer being killed.
-    (set-process-query-on-exit-flag (get-buffer-process gud-comint-buffer) nil)
-    (kill-buffer gud-comint-buffer)))
+    (if (mega-debug--adapter-running-p)
+        (mega-dap-quit)
+      ;; Asked once, above; not a second time by the buffer being killed.
+      (set-process-query-on-exit-flag (get-buffer-process gud-comint-buffer) nil)
+      (kill-buffer gud-comint-buffer))))
 
 ;; After a stepping key, the last letter alone repeats.
 (defvar-keymap mega-debug-repeat-map
@@ -271,6 +349,10 @@ debugger that starts its program at once, as pdb does, continues it."
     (let ((path (mega-exe-p (plist-get (cdr entry) :program))))
       (mega-doctor-row (symbol-name (car entry)) (or path "not found")
                        (unless path 'shadow))))
+  (mega-doctor-row "in a container"
+                   (pcase mega-debug-backend
+                     ('gud "gdb's plain console")
+                     (_ "stack and variables, with gdb 14 or newer there")))
   (mega-doctor-row "debuginfod"
                    (pcase gdb-debuginfod-enable-setting
                      ('nil "off: gdb fetches nothing from the network")

@@ -49,11 +49,22 @@ lists what can follow.
 | `C-g` | Cancel whatever is happening |
 | `C-h k` | What does this key do? |
 
-In code, `C-c C-c` comments or uncomments, and `M-n` / `M-p` jump between the
-uses of the symbol at point.
+In code, `C-c C-c` comments or uncomments, `C-c f` folds the block the cursor
+is in (`C-c F`: all of them), and `M-n` / `M-p` jump between the uses of the
+symbol at point.
+
+The mouse works in the terminal: click, scroll, hover for a hint. Selecting
+text with the terminal itself then needs Shift held down; `(setq mega-mouse
+nil)` in `local.el` gives the mouse back to the terminal.
 
 **The completion menu** appears as you type. `TAB` takes a candidate, `C-n` /
 `C-p` choose, `C-g` closes it; nothing is ever inserted unasked.
+
+**The debugger** follows the program through your files. On this machine it
+is Emacs's own gdb interface (`M-x gdb-many-windows` adds the stack and the
+variables). In a dev container MEGA shows those itself, in a window below,
+and `C-c g b` sets breakpoints before you start; that needs gdb 14 or newer
+in the container.
 
 **In the search prompt**, `C-o ?` shows the settings and `C-o` plus a letter
 changes one (`c` case, `u` untracked files, `h` hidden, `w` whole words, `e`

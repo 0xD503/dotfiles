@@ -185,5 +185,31 @@
   (should column-number-mode)
   (should show-paren-mode))
 
+;;;; The mouse
+
+(ert-deftest mega-ui-the-mouse-is-not-set-up-during-startup ()
+  (should-not (memq 'xt-mouse mega-test-features-at-startup))
+  (should-not (memq 'tty-tip mega-test-features-at-startup)))
+
+(ert-deftest mega-ui-the-mouse-follows-its-setting ()
+  (let (switched)
+    (cl-letf (((symbol-function 'xterm-mouse-mode)
+               (lambda (&rest _) (push 'mouse switched)))
+              ((symbol-function 'tty-tip-mode)
+               (lambda (&rest _) (push 'hints switched))))
+      (let ((mega-mouse nil))
+        (mega-ui-mouse)
+        (should-not switched))
+      (let ((mega-mouse t))
+        (mega-ui-mouse)
+        (should (memq 'mouse switched))
+        ;; Hints in a popup only where popups can be drawn.
+        (should (eq (and (memq 'hints switched) t)
+                    (featurep 'tty-child-frames)))))))
+
+(ert-deftest mega-ui-the-wheel-scrolls-evenly ()
+  (should-not mouse-wheel-progressive-speed)
+  (should (equal (car mouse-wheel-scroll-amount) 3)))
+
 (provide 'mega-ui-test)
 ;;; mega-ui-test.el ends here

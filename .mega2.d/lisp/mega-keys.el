@@ -47,6 +47,8 @@
      ("M-n"     mega-symbol-next     "Next occurrence of the symbol at point" :text)
      ("M-p"     mega-symbol-previous "Previous occurrence of the symbol at point" :text)
      ("C-c s"   mega-snippet-insert  "Insert a snippet")
+     ("C-c f"   mega-fold-toggle     "Fold or unfold the block the cursor is in" :code)
+     ("C-c F"   mega-fold-all        "Fold every block, or unfold everything" :code)
      ("C-x u"   mega-undo-tree       "The undo history as a tree: every state the text was in"))
     ("Code"
      ("C-c d"   mega-doc-buffer   "Documentation for the thing at point, in a side window")

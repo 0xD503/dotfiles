@@ -42,6 +42,62 @@
     (use-local-map (make-sparse-keymap))
     (should-error (mega-major-mode-ctrl-c-ctrl-c) :type 'user-error)))
 
+;;;; Folding
+
+(defun mega-edit-test--visible ()
+  "The text of the current buffer that is not folded away."
+  (let ((text "") (position (point-min)))
+    (while (< position (point-max))
+      (let ((next (next-single-char-property-change position 'invisible nil (point-max))))
+        (unless (invisible-p position)
+          (setq text (concat text (buffer-substring-no-properties position next))))
+        (setq position next)))
+    text))
+
+(ert-deftest mega-edit-folding-costs-nothing-until-it-is-used ()
+  (should-not (memq 'hideshow mega-test-features-at-startup))
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (should-not (bound-and-true-p hs-minor-mode))))
+
+(ert-deftest mega-edit-a-block-folds-and-unfolds ()
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (insert "(defun one ()\n  (first)\n  (second))\n\n(defun two ()\n  (third))\n")
+    (set-buffer-modified-p nil)
+    ;; The cursor is somewhere in the body of the first function.
+    (goto-char (point-min))
+    (search-forward "(first)")
+    (beginning-of-line)
+    (mega-fold-toggle)
+    (should (bound-and-true-p hs-minor-mode))
+    (let ((visible (mega-edit-test--visible)))
+      (should (string-match-p "(defun one ()" visible))
+      (should-not (string-match-p "first\\|second" visible))
+      ;; Only the block the cursor was in.
+      (should (string-match-p "(third)" visible)))
+    ;; Folding hides text; it never changes it.
+    (should-not (buffer-modified-p (current-buffer)))
+    (should (string-match-p "(second)" (buffer-string)))
+    (mega-fold-toggle)
+    (should (equal (mega-edit-test--visible) (buffer-string)))))
+
+(ert-deftest mega-edit-everything-folds-and-unfolds-at-once ()
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (insert "(defun one ()\n  (first))\n\n(defun two ()\n  (third))\n")
+    (set-buffer-modified-p nil)
+    (goto-char (point-min))
+    (mega-fold-all)
+    (let ((visible (mega-edit-test--visible)))
+      (should (string-match-p "(defun one ()" visible))
+      (should (string-match-p "(defun two ()" visible))
+      (should-not (string-match-p "first\\|third" visible)))
+    ;; With anything folded, the same key unfolds everything.
+    (mega-fold-all)
+    (should (equal (mega-edit-test--visible) (buffer-string)))
+    (should-not (buffer-modified-p))))
+
 ;;;; Symbol jump
 
 (ert-deftest mega-edit-jumps-between-occurrences-of-a-symbol-and-wraps ()

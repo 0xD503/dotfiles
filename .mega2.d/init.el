@@ -85,6 +85,7 @@
                             mega-debug-next mega-debug-step mega-debug-finish
                             mega-debug-until mega-debug-continue mega-debug-print
                             mega-debug-up mega-debug-down mega-debug-quit))
+    (mega-dap)                         ; entered through mega-debug
     (mega-llm    :commands (mega-claude mega-claude-send-region mega-claude-ask
                             mega-claude-explain mega-claude-rewrite
                             mega-claude-stop))

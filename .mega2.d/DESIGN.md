@@ -134,11 +134,11 @@ project shell; editable grep results; GUD debuggers (gdb, lldb, pdb).
 | Dev Containers | See below |
 | Claude | Project session in a tmux pane or a terminal buffer; one-shot ask, explain and rewrite-with-diff through `claude --print` |
 | Undo | Tree drawn from Emacs's own undo list; history persisted per file |
-| Debugging | Picks the GUD front end and the program for the project; one set of keys for gdb, lldb and pdb |
+| Debugging | Picks the debugger and the program for the project; one set of keys for gdb, lldb and pdb. On the host through GUD, in a container through a debug adapter |
+| Debug adapter client | Own client for the Debug Adapter Protocol: breakpoints that outlive sessions, stack, variables, output |
 | Workspaces | Named tab layouts saved and resumed |
 | Small helpers | Indent guides, TODO highlight, symbol jump, trim changed lines, clipboard bridge |
 | Modes | Markdown, Zig, justfile, Rust fallback |
-| DAP client | Last milestone, optional |
 
 ### Not in 2.0
 
@@ -160,8 +160,8 @@ compose without the official CLI; RON mode; anything GUI-specific.
     features  mega-complete  mega-project  mega-workspace  mega-home
               mega-search  mega-edit  mega-indent-guides  mega-trust
               mega-undo  mega-undo-tree  mega-snippet  mega-format
-              mega-lsp  mega-lang  mega-task  mega-debug  mega-container
-              mega-remote  mega-llm  mega-zone                      (M1–M5)
+              mega-lsp  mega-lang  mega-task  mega-debug  mega-dap
+              mega-container  mega-remote  mega-llm  mega-zone      (M1–M6)
     modes     mega-mode-markdown  mega-mode-zig  mega-mode-just  mega-mode-rust
 tests/mega2/      ERT suite and the two start-up probes (not deployed)
 tests/test_mega2.sh
@@ -202,6 +202,17 @@ tests/test_mega2.sh
   to where, and Emacs discards old history), so that state is drawn as a
   node of its own; and MEGA's own mark for the oldest state is dropped the
   moment the end of the list changes.
+- **Two debugger interfaces, one set of keys.** On the host MEGA starts
+  Emacs's own (GUD; for gdb the full `gdb-mi`), which is mature and costs
+  no code. In a container that one needs a terminal of the host, so MEGA
+  talks to gdb as a debug adapter instead (`mega-dap`), over the same
+  `podman exec` every other tool uses. `mega-debug-backend` overrides the
+  rule; an adapter that is missing or too old falls back to GUD. The
+  client is three layers — bytes, session, display — and wholly
+  asynchronous: a key sends a request and returns. It was written against
+  a recorded conversation with gdb 16, whose habits the test stand-in
+  keeps: `launch` is answered only after `configurationDone`, breakpoints
+  start unverified, frame ids are stale after every stop.
 - **Programs that take long** (`claude --print`) go through
   `mega-exec-start`, which returns at once and calls back; a mistake in the
   callback is reported, not raised, because it runs in the middle of
@@ -218,7 +229,7 @@ tests/test_mega2.sh
 | M3 | Project trust, format on save, snippets, tasks, indent guides, small edit helpers | done |
 | M4 | Dev Containers: native subset, hand-over to the official CLI | done |
 | M5 | GUD debugging, Claude, undo tree + persistence, remote, zone | done |
-| M6 | DAP client (optional) | not started |
+| M6 | Debug adapter client, used for debugging in a container | done |
 
 Each milestone ends with its unit tests, doctor rows and guide entries.
 
@@ -240,6 +251,14 @@ Three things learned while building it, worth keeping in mind:
 - Emacs renders no modeline and runs no `emacs-startup-hook` in batch mode.
   Anything that depends on either belongs in the terminal stage, and a probe
   must print an explicit verdict: a clean exit proves nothing.
+- Emacs is idle only while it waits for a key with no time limit; not in a
+  hook, not in `sit-for`. What MEGA postpones until after startup can
+  therefore only be observed by a probe that itself runs from an idle
+  timer, which is how the terminal probe runs.
+- A batch Emacs is killed, silently, by writing to a program that has
+  closed its input (the Emacs you edit in gets an error instead). Stand-in
+  programs in the tests read their input; the real case is tried in the
+  terminal stage.
 - A variable that becomes buffer-local when set needs `setq-default`. A unit
   test scans MEGA's source for plain `setq` on such variables.
 - Emacs makes no backups under the temporary directory, which is where the
@@ -267,12 +286,19 @@ Three things learned while building it, worth keeping in mind:
   stand-in. The arguments of `mega-claude-print-arguments` are taken from
   the program's own help and their values pass its checks, but no question
   has been sent with them: that would have been a request nobody asked for.
-- **Debugging in a container** uses gdb's plain interface (`gud-gdb`), since
-  the full one wants a terminal of the host for the program's input and
-  output. Beyond the stand-ins of the suite it was run once for real: gdb
-  16.3 inside a container made from a `devcontainer.json`, breakpoint set
-  from the host buffer, the arrow following in the host file.
+- **Debugging in a container** was run for real in both forms, beyond the
+  stand-ins of the suite: gdb 16.3 inside a container made from a
+  `devcontainer.json`, through the adapter client and through gdb's plain
+  console (`gud-gdb`, the fallback), with a breakpoint set from the host
+  buffer and the line followed in the host file.
+- **Adapters.** Only gdb is in `mega-dap-adapters`, because only gdb could
+  be tried. lldb-dap and debugpy are a table row each (the launch
+  arguments differ per adapter and are fixed in `mega-dap-start` for now).
+  Not done: conditional breakpoints, watch expressions, expanding a
+  structure in the variables list, several threads shown at once, attaching
+  to a running program, and giving the program arguments or input.
 - **Undo tree extras** left out: a diff between two states, and marking the
   state that is saved on disk.
 - **One ruler.** Emacs draws a single ruler; several at once would be new code.
-- **DAP** is the largest single piece and has not been started.
+- **Breakpoints with GUD** still need a running debugger: only the adapter
+  path keeps them between sessions.

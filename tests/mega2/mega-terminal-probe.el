@@ -4,9 +4,9 @@
 
 ;; Not an ERT file.  tests/test_mega2.sh starts a real, interactive Emacs in a
 ;; pseudo-terminal — through `--init-directory', through chemacs2, or with an
-;; Emacs too old for MEGA — and loads this file with `-l'.  By then the init
-;; files have run, so this only looks, writes what it saw to the file named by
-;; MEGA_TEST_REPORT, and exits.
+;; Emacs too old for MEGA — and loads this file with `-l'.  Half a second
+;; after Emacs has started and gone idle, this looks at the session, writes
+;; what it saw to the file named by MEGA_TEST_REPORT, and exits.
 ;;
 ;; MEGA_TEST_EXPECT says what a correct start looks like: "supported" for a
 ;; configured MEGA, "refused" for an old Emacs that must be left plain.
@@ -327,6 +327,15 @@ looks for the picture itself in what the terminal was sent."
       (mega-terminal-probe--problem "the modeline does not say a buffer is narrowed")))
   (unless (eq (key-binding (kbd "C-c ?")) 'mega-help)
     (mega-terminal-probe--problem "C-c ? is %s" (key-binding (kbd "C-c ?"))))
+  ;; What MEGA puts off until the first screen is up has happened by now:
+  ;; this probe runs once Emacs is idle.  The checks below then run with all
+  ;; of it on, the mouse and its popups included.
+  (dolist (mode '(which-key-mode recentf-mode winner-mode repeat-mode
+                  global-auto-revert-mode xterm-mouse-mode))
+    (unless (and (boundp mode) (symbol-value mode))
+      (mega-terminal-probe--problem "%s was not switched on after startup" mode)))
+  (when (and (featurep 'tty-child-frames) (not (bound-and-true-p tty-tip-mode)))
+    (mega-terminal-probe--problem "hints under the pointer are not switched on"))
   (mega-terminal-probe--navigation)
   (mega-terminal-probe--completion)
   (mega-terminal-probe--undo)
@@ -377,8 +386,13 @@ looks for the picture itself in what the terminal was sent."
     (insert (format "verdict=%s\n" (if mega-terminal-probe-problems "bad" "ok"))))
   (kill-emacs (if mega-terminal-probe-problems 1 0)))
 
-;; Depth 100, added last: runs after everything the init files put there,
-;; including the warning an unsupported Emacs gets.
-(add-hook 'emacs-startup-hook #'mega-terminal-probe--report 100)
+;; Not during startup, but once Emacs is idle, which is when the first screen
+;; is up and it waits for a key.  Only then has the work MEGA puts off until
+;; after startup been done; a probe run from the startup hook itself could
+;; never see it, because Emacs is not idle while a hook runs.
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (run-with-idle-timer 0.5 nil #'mega-terminal-probe--report))
+          100)
 
 ;;; mega-terminal-probe.el ends here

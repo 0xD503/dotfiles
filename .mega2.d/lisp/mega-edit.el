@@ -168,6 +168,43 @@ Word boundaries, not symbol boundaries: in many languages the colon of
 
 (add-hook 'prog-mode-hook #'mega-edit-highlight-todo)
 
+;;;; Folding
+;;
+;; Emacs's own Hide/Show, with two keys instead of its eight.  It is switched
+;; on in a buffer the first time you fold something there, so a buffer you
+;; never fold in pays nothing for it.
+
+(declare-function hs-toggle-hiding "hideshow")
+(declare-function hs-hide-all "hideshow")
+(declare-function hs-show-all "hideshow")
+(defvar hs-minor-mode)
+
+(defun mega-fold--ready ()
+  "Switch Hide/Show on in the current buffer, if it is not."
+  (unless (bound-and-true-p hs-minor-mode)
+    (hs-minor-mode 1)))
+
+(defun mega-fold--any-p ()
+  "Non-nil if something in the current buffer is folded."
+  (seq-some (lambda (overlay) (overlay-get overlay 'hs))
+            (overlays-in (point-min) (point-max))))
+
+;;;###autoload
+(defun mega-fold-toggle ()
+  "Fold the block the cursor is in, or unfold it."
+  (interactive)
+  (mega-fold--ready)
+  (hs-toggle-hiding))
+
+;;;###autoload
+(defun mega-fold-all ()
+  "Fold every block of the buffer; if anything is folded, unfold everything."
+  (interactive)
+  (mega-fold--ready)
+  (if (mega-fold--any-p)
+      (hs-show-all)
+    (hs-hide-all)))
+
 ;;;; Indentation guides
 ;;
 ;; The mode itself is in mega-indent-guides.el and loads with the first code
