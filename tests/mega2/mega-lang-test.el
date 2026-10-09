@@ -160,7 +160,8 @@ Nothing is ever offered for installation, and no decision is recorded."
 
 (ert-deftest mega-lang-a-server-starts-only-when-it-is-installed ()
   (let (started)
-    (cl-letf (((symbol-function 'eglot-ensure) (lambda () (setq started t))))
+    (cl-letf (((symbol-function 'eglot-ensure) (lambda () (setq started t)))
+              ((symbol-function 'mega-trust-p) (lambda (&rest _) t)))
       (with-temp-buffer
         (setq buffer-file-name "/nonexistent-dir/main.rs"
               major-mode 'mega-rust-mode)
@@ -172,6 +173,31 @@ Nothing is ever offered for installation, and no decision is recorded."
               (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
                 (mega-lang-start-server)
                 (should started)))
+          (setq buffer-file-name nil))))))
+
+(ert-deftest mega-lang-a-server-starts-only-in-a-trusted-project ()
+  "A language server runs the project's build scripts.  Untrusted, or not
+yet decided in a session where nobody can be asked: no server."
+  (let (started asked)
+    (cl-letf (((symbol-function 'eglot-ensure) (lambda () (setq started t)))
+              ((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
+      (with-temp-buffer
+        (setq buffer-file-name "/nonexistent-dir/main.rs"
+              major-mode 'mega-rust-mode)
+        (unwind-protect
+            (progn
+              (cl-letf (((symbol-function 'mega-trust-p)
+                         (lambda (_dir ask &rest _) (setq asked ask) nil)))
+                (mega-lang-start-server)
+                (should-not started)
+                ;; It did ask: this is the moment the user is consulted.
+                (should asked)
+                (should-error (mega-lang--contact) :type 'user-error))
+              ;; With no stub at all, in this batch Emacs, nobody is asked
+              ;; and an undecided project counts as untrusted.
+              (let ((mega-trust--decisions nil))
+                (mega-lang-start-server)
+                (should-not started)))
           (setq buffer-file-name nil))))))
 
 (ert-deftest mega-lang-no-server-is-started-for-a-remote-file-or-no-file ()
@@ -191,7 +217,8 @@ Nothing is ever offered for installation, and no decision is recorded."
   "That is what lets a server run inside a project's container."
   (with-temp-buffer
     (setq major-mode 'mega-rust-mode)
-    (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
+    (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) t))
+              ((symbol-function 'mega-trust-p) (lambda (&rest _) t)))
       (let ((mega-exec-context-functions nil))
         (should (equal (mega-lang--contact) '("rust-analyzer"))))
       (let ((mega-exec-context-functions

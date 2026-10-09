@@ -73,8 +73,12 @@ Examples of that ordering already decided:
    - `enable-local-variables :safe`, no local `eval`, no remote dir-locals.
    - `compilation-read-command` stays on: it is the only reason Emacs accepts
      a project's `compile-command`.
-   - A per-project trust prompt (root + file hash) before anything from
-     `devcontainer.json` or a project task file runs.
+   - **Project trust.** Language servers, formatters and build tools run
+     code that belongs to the project (build scripts, macros, plugins). MEGA
+     asks once per project before it starts any of them, remembers the
+     answer, and in an untrusted project only edits text.
+   - A further prompt, tied to the file's hash, before anything from
+     `devcontainer.json` runs.
    - Processes get argument lists, never shell strings built from file names
      or search input.
 4. **Stability.**
@@ -182,11 +186,12 @@ tests/test_mega2.sh
 | | Delivers | Status |
 | --- | --- | --- |
 | M0 | Skeleton: init, base modules, theme, modeline, ruler, session, doctor, cheat sheet, tests, guide | done |
-| M1 | Minibuffer, picker, `mega-exec`, file finder, live search, project keys, file tree | |
-| M2 | Popup, completion menu, eglot, language table, parser prompt, the four modes | |
-| M3 | Format on save, snippets, tasks, indent guides, small edit helpers | |
+| M1 | Minibuffer, live prompt, `mega-exec`, file finder, live search, project keys, file tree | done |
+| — | Home page and workspaces (requested after M0; workspaces moved up from M5) | done |
+| M2 | Popup, completion menu, eglot, language table, parser prompt, the four modes | done |
+| M3 | Project trust, format on save, snippets, tasks, indent guides, small edit helpers | |
 | M4 | Dev Containers | |
-| M5 | GUD debugging, Claude, workspaces, undo tree + persistence, remote, zone | |
+| M5 | GUD debugging, Claude, undo tree + persistence, remote, zone | |
 | M6 | DAP client (optional) | |
 
 Each milestone ends with its unit tests, doctor rows and guide entries.

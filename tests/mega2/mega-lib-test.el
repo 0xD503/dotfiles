@@ -162,6 +162,25 @@
         (mega-report-module-failures)
         (should (string-match-p "mega-test-x: bad thing" warned))))))
 
+;;;; Work that can wait
+
+(ert-deftest mega-lib-deferred-work-runs-at-once-when-there-is-no-startup-to-wait-for ()
+  (let (ran)
+    (mega-after-startup (lambda () (setq ran t)))
+    (should ran)))
+
+(ert-deftest mega-lib-deferred-work-waits-for-startup-in-a-real-session ()
+  (let ((noninteractive nil) (after-init-time nil)
+        (emacs-startup-hook nil) ran)
+    (mega-after-startup (lambda () (setq ran t)))
+    (should-not ran)
+    ;; It is queued for the moment startup ends...
+    (should (= 1 (length emacs-startup-hook)))
+    ;; ...and once startup is over, it runs straight away.
+    (let ((after-init-time (current-time)))
+      (mega-after-startup (lambda () (setq ran 'now)))
+      (should (eq ran 'now)))))
+
 ;;;; The real module list
 
 (ert-deftest mega-lib-every-listed-module-exists-and-loaded-cleanly ()

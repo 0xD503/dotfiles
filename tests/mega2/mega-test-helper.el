@@ -103,6 +103,15 @@ there is none."
                    typed))))))
      ,@body))
 
+(defun mega-test-wait-for (predicate &optional seconds)
+  "Wait up to SECONDS, by default 5, for PREDICATE to return non-nil.
+Returns what PREDICATE returned.  Output of processes is read meanwhile."
+  (let ((deadline (+ (float-time) (or seconds 5))) value)
+    (while (and (not (setq value (funcall predicate)))
+                (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    value))
+
 (defun mega-test-buffer-string (name)
   "The text of buffer NAME, without properties."
   (with-current-buffer name

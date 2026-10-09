@@ -27,6 +27,7 @@
 
 (require 'mega-lib)
 (require 'mega-exec)
+(require 'mega-trust)
 
 (declare-function treesit-available-p "treesit.c")
 (declare-function treesit-language-available-p "treesit.c")
@@ -215,16 +216,21 @@ server run inside the project's container."
          (server (and spec (mega-lang-server spec))))
     (unless server
       (user-error "No language server for %s is installed" major-mode))
+    (unless (mega-trust-p default-directory t "start its language server")
+      (user-error "This project is not trusted; see M-x mega-trust-project"))
     (mega-exec-command (car server) (cdr server) default-directory)))
 
 (defun mega-lang-start-server ()
   "Start the language server for this buffer, if one is installed.
-Runs when a file of a known language is opened.  Remote files are left
-alone: `M-x eglot' starts a server there on request."
+Runs when a file of a known language is opened.  A server builds the
+project to understand it, which runs the project's own code, so the
+project has to be trusted first: this is where MEGA asks, once.  Remote
+files are left alone: `M-x eglot' starts a server there on request."
   (when (and buffer-file-name
              (not (file-remote-p buffer-file-name)))
     (when-let* ((spec (mega-lang-row-for-mode major-mode))
-                ((mega-lang-server spec)))
+                ((mega-lang-server spec))
+                ((mega-trust-p default-directory t "start its language server")))
       (eglot-ensure))))
 
 (defun mega-lang--register-servers ()

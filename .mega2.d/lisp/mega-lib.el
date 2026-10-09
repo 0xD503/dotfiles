@@ -24,7 +24,7 @@
 
 ;;; Code:
 
-(defconst mega-version "2.0.0-m2"
+(defconst mega-version "2.0.0-m3"
   "The MEGA version.  The suffix names the last finished milestone.")
 
 (defgroup mega nil
@@ -139,6 +139,19 @@ Memoised: MEGA asks about the same dozen programs repeatedly, and
   (interactive)
   (clrhash mega--exe-cache)
   (message "MEGA: executable cache cleared"))
+
+;;;; Work that can wait until Emacs is on screen
+
+(defun mega-after-startup (function)
+  "Call FUNCTION as soon as Emacs is idle after starting.
+For switching on something that is not needed in the first instant, so
+that it does not delay the first screen.  FUNCTION is called at once if
+startup is already over, and in a batch Emacs, which has no idle time."
+  (if (or noninteractive after-init-time)
+      (funcall function)
+    (add-hook 'emacs-startup-hook
+              (lambda () (run-with-idle-timer 0.05 nil function))
+              100)))
 
 ;;;; Loading modules without betting the session on them
 

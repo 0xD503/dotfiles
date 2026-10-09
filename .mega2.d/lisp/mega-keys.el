@@ -11,11 +11,20 @@
 ;; MEGA key means the same thing in every buffer.  `M-x mega-keys-mode' turns
 ;; the whole layer off.
 ;;
-;; A row is (KEY COMMAND DESCRIPTION).  KEY is in `kbd' notation, or nil for
-;; a command that has no key and is listed in the cheat sheet as `M-x'.
-;; COMMAND may also name a keymap, which makes KEY a prefix.
+;; A row is (KEY COMMAND DESCRIPTION [WHERE]).  KEY is in `kbd' notation, or
+;; nil for a command that has no key and is listed in the cheat sheet as
+;; `M-x'.  COMMAND may also name a keymap, which makes KEY a prefix.
 ;; DESCRIPTION is what the cheat sheet shows; it is written here, not taken
 ;; from the docstring, so that showing the sheet never loads a module.
+;;
+;; WHERE, when given, limits a key to buffers where it makes sense, leaving
+;; what Emacs had there alone everywhere else:
+;;
+;;   :code   buffers of source code and configuration files
+;;   :text   those, and prose
+;;
+;; That is what keeps `M-n' meaning "next in history" at a prompt and "next
+;; error" in a compilation buffer.
 
 ;;; Code:
 
@@ -24,6 +33,7 @@
 (defconst mega-keys
   '(("Help"
      ("C-c ?" mega-help   "This cheat sheet")
+     ("C-c h" mega-home   "The home page: continue, recent projects")
      (nil     mega-doctor "What works on this machine, and what is missing"))
     ("Find"
      ("M-g a" mega-search-project "Search the project as you type")
@@ -31,9 +41,17 @@
      ("M-g i" imenu               "Jump to a definition in this buffer")
      ("C-c p" mega-project-map    "Project: f file, p switch, b buffer, g grep, c compile, s shell")
      ("C-c t" mega-project-tree   "Show or hide the file tree"))
+    ("Edit"
+     ("C-c C-c" mega-comment-dwim "Comment or uncomment the region or the line" :code)
+     ("C-c C-v" mega-major-mode-ctrl-c-ctrl-c "What this mode itself has on C-c C-c" :code)
+     ("M-n"     mega-symbol-next     "Next occurrence of the symbol at point" :text)
+     ("M-p"     mega-symbol-previous "Previous occurrence of the symbol at point" :text)
+     ("C-c s"   mega-snippet-insert  "Insert a snippet"))
     ("Code"
      ("C-c d"   mega-doc-buffer   "Documentation for the thing at point, in a side window")
      ("C-c D"   mega-doc-popup    "The same, in a popup")
+     ("C-c c f" mega-format-buffer  "Format the buffer")
+     ("C-c c F" mega-format-project "Format the whole project")
      ("C-c c r" eglot-rename      "Rename the symbol at point everywhere")
      ("C-c c a" eglot-code-actions "Offer fixes and refactorings here")
      ("C-c c i" eglot-find-implementation "Go to the implementation")
@@ -44,8 +62,14 @@
      ("C-c c p" flymake-goto-prev-error "Previous problem")
      ("C-c c e" flymake-show-buffer-diagnostics  "List the problems in this buffer")
      ("C-c c E" flymake-show-project-diagnostics "List the problems in the project"))
+    ("Tasks"
+     ("C-c x b" mega-task-build       "Build the project")
+     ("C-c x r" mega-task-run-project "Run the project")
+     ("C-c x t" mega-task-test        "Test the project")
+     ("C-c x x" mega-task-choose      "Choose a task of the project and run it")
+     ("C-c x g" mega-task-again       "Run the last task again")
+     ("C-c x k" mega-task-stop        "Stop the running task"))
     ("Workspaces"
-     ("C-c h"   mega-home             "The home page: continue, recent projects")
      ("C-c w s" mega-workspace-save   "Save the files and windows on screen under a name")
      ("C-c w r" mega-workspace-resume "Bring a saved workspace back")
      ("C-c w n" mega-workspace-new    "Open an empty tab")
@@ -55,14 +79,31 @@
      ("M-{" shrink-window-horizontally  "Make the window narrower")
      ("M-}" enlarge-window-horizontally "Make the window wider")))
   "Every binding MEGA defines, grouped for the cheat sheet.
-Each element is (GROUP ROW...), and each ROW is (KEY COMMAND DESCRIPTION).")
+Each element is (GROUP ROW...); see the Commentary for a ROW.")
+
+(defun mega-keys--applies-p (where)
+  "Non-nil if a key limited to WHERE applies in the current buffer."
+  (pcase where
+    (:code (derived-mode-p 'prog-mode 'conf-mode))
+    (:text (derived-mode-p 'prog-mode 'conf-mode 'text-mode))
+    (_ t)))
+
+(defun mega-keys--binding (row)
+  "What ROW's key is bound to: its command, limited to where it applies."
+  (let ((command (nth 1 row))
+        (where (nth 3 row)))
+    (if where
+        `(menu-item "" ,command
+                    :filter ,(lambda (command)
+                               (and (mega-keys--applies-p where) command)))
+      command)))
 
 (defvar mega-keys-mode-map
   (let ((map (make-sparse-keymap)))
     (dolist (group mega-keys)
       (dolist (row (cdr group))
         (when (car row)
-          (define-key map (kbd (car row)) (nth 1 row)))))
+          (define-key map (kbd (car row)) (mega-keys--binding row)))))
     map)
   "Keymap holding every binding MEGA defines.  Built from `mega-keys'.")
 

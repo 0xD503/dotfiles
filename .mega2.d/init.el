@@ -62,13 +62,20 @@
     mega-workspace   ; files and windows put away and brought back
     mega-home        ; the page Emacs opens on
     mega-exec        ; the one way MEGA runs a program
+    mega-trust       ; which projects may run their own code
     mega-popup       ; a small window that floats over the text
     mega-complete    ; the completion menu
     mega-lsp         ; the language server, diagnostics, documentation
     mega-lang        ; the language table, and which mode a file gets
+    mega-edit        ; comments, whitespace, pairs, the clipboard
+    mega-snippet     ; templates with places to fill in
+    mega-format      ; format on save
     ;; Loaded on first use.
     (mega-pick)      ; a prompt whose choices come from a program
     (mega-search :commands (mega-search-project mega-search-symbol))
+    (mega-task   :commands (mega-task-build mega-task-run-project mega-task-test
+                            mega-task-choose mega-task-again mega-task-stop))
+    (mega-indent-guides :commands (mega-indent-guides-mode))
     (mega-mode-simple)                 ; what MEGA's own modes share
     (mega-mode-rust)  (mega-mode-zig)  ; entered through mega-lang's table
     (mega-mode-just)  (mega-mode-markdown)

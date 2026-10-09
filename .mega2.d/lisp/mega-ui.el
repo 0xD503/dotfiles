@@ -114,7 +114,7 @@
 
 (setq which-key-idle-delay 0.5
       which-key-add-column-padding 1)
-(which-key-mode 1)
+(mega-after-startup #'which-key-mode)
 
 (provide 'mega-ui)
 ;;; mega-ui.el ends here

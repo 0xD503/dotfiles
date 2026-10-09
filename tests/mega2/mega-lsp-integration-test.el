@@ -45,6 +45,9 @@
            (eglot-sync-connect 10)
            (eglot-server-programs nil)
            (mega-exec-context-functions nil)
+           ;; The user said yes to this project.
+           (mega-trust--decisions
+            (list (cons (abbreviate-file-name project) t)))
            buffer)
       (mega-lang--register-servers)
       (unwind-protect

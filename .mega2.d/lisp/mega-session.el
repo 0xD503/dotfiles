@@ -36,6 +36,7 @@
 (defvar save-place-ignore-files-regexp)
 (defvar bookmark-default-file)
 (defvar project-list-file)
+(declare-function recentf-track-opened-file "recentf")
 
 (defun mega-session--private-regexp ()
   "One regexp matching every file `mega-private-file-p' recognises."
@@ -64,9 +65,17 @@
                             ;; Remote files: listing them is harmless, but
                             ;; checking that they still exist is a round trip.
                             "\\`/[^/:]+:"))
-;; Reading the list back announces itself in the echo area on every start.
-(let ((inhibit-message t))
-  (recentf-mode 1))
+(defun mega-session--start-recent-files ()
+  "Start keeping the list of recent files, including the ones already open."
+  ;; Reading the list back announces itself in the echo area.
+  (let ((inhibit-message t))
+    (recentf-mode 1))
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when buffer-file-name
+        (recentf-track-opened-file)))))
+
+(mega-after-startup #'mega-session--start-recent-files)
 
 ;;;; Cursor places
 
@@ -85,7 +94,7 @@
       project-list-file (mega-state "projects"))
 
 ;; `C-c <left>' and `C-c <right>' step back and forth through window layouts.
-(winner-mode 1)
+(mega-after-startup #'winner-mode)
 
 (provide 'mega-session)
 ;;; mega-session.el ends here

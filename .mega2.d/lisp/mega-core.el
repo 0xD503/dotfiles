@@ -60,7 +60,7 @@
 
 (setq auto-revert-verbose nil
       global-auto-revert-non-file-buffers t)
-(global-auto-revert-mode 1)
+(mega-after-startup #'global-auto-revert-mode)
 
 ;; `custom-file' was pointed at the state directory in init.el.
 (when (file-readable-p custom-file)

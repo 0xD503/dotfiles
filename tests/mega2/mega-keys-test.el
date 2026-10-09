@@ -3,6 +3,8 @@
 ;;; Code:
 
 (require 'mega-test-helper)
+(require 'ert-x)
+(require 'compile)
 
 (defun mega-keys-test--rows ()
   "Every (KEY COMMAND DESCRIPTION) row of `mega-keys'."
@@ -16,11 +18,17 @@ inside belongs to whoever owns that keymap."
     (map-keymap
      (lambda (event binding)
        (let ((key (vconcat prefix (vector event))))
-         (if (and (keymapp binding) (not (symbolp binding)))
-             (setq found (append (mega-keys-test--bound binding key) found))
-           (push (cons (key-description key) binding) found))))
+         (cond ((eq (car-safe binding) 'menu-item)
+                (push (cons (key-description key) (nth 2 binding)) found))
+               ((and (keymapp binding) (not (symbolp binding)))
+                (setq found (append (mega-keys-test--bound binding key) found)))
+               (t (push (cons (key-description key) binding) found)))))
      map)
     found))
+
+(defun mega-keys-test--command (binding)
+  "The command behind BINDING, looking through a where-it-applies filter."
+  (if (eq (car-safe binding) 'menu-item) (nth 2 binding) binding))
 
 (defun mega-keys-test--runnable-p (binding)
   "Non-nil if BINDING is a command or names a keymap."
@@ -36,16 +44,51 @@ inside belongs to whoever owns that keymap."
     (should (stringp (car group)))
     (should (cdr group)))
   (dolist (row (mega-keys-test--rows))
-    (should (= (length row) 3))
+    (should (memq (length row) '(3 4)))
+    (should (memq (nth 3 row) '(nil :code :text)))
     (should (or (null (car row)) (stringp (car row))))
     (should (symbolp (nth 1 row)))
     (should (stringp (nth 2 row)))
     (should-not (string-empty-p (nth 2 row)))))
 
 (ert-deftest mega-keys-every-key-in-the-table-is-bound-to-its-command ()
-  (dolist (row (mega-keys-test--rows))
-    (when (car row)
-      (should (eq (lookup-key mega-keys-mode-map (kbd (car row))) (nth 1 row))))))
+  ;; Looked up in a code buffer, where every key applies: a key limited to
+  ;; code is, by design, not there in other buffers.
+  (with-temp-buffer
+    (prog-mode)
+    (dolist (row (mega-keys-test--rows))
+      (when (car row)
+        (should (eq (mega-keys-test--command
+                     (lookup-key mega-keys-mode-map (kbd (car row))))
+                    (nth 1 row)))))))
+
+(ert-deftest mega-keys-a-limited-key-leaves-other-buffers-alone ()
+  "M-n is the symbol jump in code and prose, and Emacs's own elsewhere."
+  (with-temp-buffer
+    (prog-mode)
+    (should (eq (key-binding (kbd "M-n")) #'mega-symbol-next))
+    (should (eq (key-binding (kbd "C-c C-c")) #'mega-comment-dwim)))
+  (with-temp-buffer
+    (text-mode)
+    (should (eq (key-binding (kbd "M-n")) #'mega-symbol-next))
+    ;; Commenting is for code; prose keeps whatever its mode has there.
+    (should-not (eq (key-binding (kbd "C-c C-c")) #'mega-comment-dwim)))
+  (with-temp-buffer
+    (special-mode)
+    (should-not (eq (key-binding (kbd "M-n")) #'mega-symbol-next)))
+  (with-temp-buffer
+    (compilation-mode)
+    (should (eq (key-binding (kbd "M-n")) #'compilation-next-error)))
+  ;; At a prompt M-n and M-p walk the history.
+  (should (eq (lookup-key minibuffer-local-map (kbd "M-n")) #'next-history-element))
+  (should (eq (ert-simulate-keys (kbd "C-o RET")
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (local-set-key (kbd "C-o")
+                                     (lambda () (interactive)
+                                       (insert (symbol-name (key-binding (kbd "M-n")))))))
+                  (intern (read-string "x: "))))
+              'next-history-element)))
 
 (ert-deftest mega-keys-nothing-is-bound-that-the-table-does-not-list ()
   (let ((table (delq nil (mapcar (lambda (row)
