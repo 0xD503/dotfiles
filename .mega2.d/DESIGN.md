@@ -189,8 +189,8 @@ tests/test_mega2.sh
 | M1 | Minibuffer, live prompt, `mega-exec`, file finder, live search, project keys, file tree | done |
 | — | Home page and workspaces (requested after M0; workspaces moved up from M5) | done |
 | M2 | Popup, completion menu, eglot, language table, parser prompt, the four modes | done |
-| M3 | Project trust, format on save, snippets, tasks, indent guides, small edit helpers | |
-| M4 | Dev Containers | |
+| M3 | Project trust, format on save, snippets, tasks, indent guides, small edit helpers | done |
+| M4 | Dev Containers: native subset, hand-over to the official CLI | done |
 | M5 | GUD debugging, Claude, undo tree + persistence, remote, zone | |
 | M6 | DAP client (optional) | |
 

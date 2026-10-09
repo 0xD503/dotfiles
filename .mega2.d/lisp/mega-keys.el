@@ -69,6 +69,13 @@
      ("C-c x x" mega-task-choose      "Choose a task of the project and run it")
      ("C-c x g" mega-task-again       "Run the last task again")
      ("C-c x k" mega-task-stop        "Stop the running task"))
+    ("Containers"
+     ("C-c k u" mega-container-up      "Start or join the project's dev container")
+     ("C-c k d" mega-container-detach  "Go back to the tools of this machine")
+     ("C-c k s" mega-container-shell   "A shell inside the container")
+     ("C-c k i" mega-container-info    "Which container this project is using")
+     ("C-c k x" mega-container-stop    "Stop the container")
+     ("C-c k r" mega-container-rebuild "Remove the container and start a new one"))
     ("Workspaces"
      ("C-c w s" mega-workspace-save   "Save the files and windows on screen under a name")
      ("C-c w r" mega-workspace-resume "Bring a saved workspace back")

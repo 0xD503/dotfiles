@@ -76,6 +76,9 @@
     (mega-task   :commands (mega-task-build mega-task-run-project mega-task-test
                             mega-task-choose mega-task-again mega-task-stop))
     (mega-indent-guides :commands (mega-indent-guides-mode))
+    (mega-container :commands (mega-container-up mega-container-detach
+                               mega-container-stop mega-container-rebuild
+                               mega-container-shell mega-container-info))
     (mega-mode-simple)                 ; what MEGA's own modes share
     (mega-mode-rust)  (mega-mode-zig)  ; entered through mega-lang's table
     (mega-mode-just)  (mega-mode-markdown)
