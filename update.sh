@@ -17,6 +17,7 @@ REPO_DIR=$(cd -- "$(dirname -- "$0")" && pwd) || exit 1
 
 DRY_RUN=0
 NO_BACKUP=0
+HAND_COPY=0
 BACKUP_DIR="$HOME/.dotfiles-backup/$(date +%Y%m%d-%H%M%S)"
 ERRORS=0
 CHANGES=0
@@ -24,9 +25,10 @@ CHANGES=0
 # Files that live in the repo but are not configuration to deploy.
 # Space-separated, compared literally against the repo-relative path.
 #
-# The .local files are here as empty stubs to copy by hand. They must never be
-# deployed or collected: deploying would overwrite whatever that machine keeps
-# in them, and collecting would push one machine's overrides to all the others.
+# The .local files are here as empty stubs to copy by hand. A plain command
+# must never deploy or collect them: deploying would overwrite whatever that
+# machine keeps in them, and collecting would push one machine's overrides to
+# all the others. Only the `local` prefix reaches them, and only on request.
 EXCLUDES="update.sh README.md LICENSE .gitignore"
 HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .gitconfig.local \
 .gitconfig.signing"
@@ -39,6 +41,7 @@ OMT_DIR="$HOME/.tmux"
 usage() {
     cat <<EOF
 usage: $PROG COMMAND [-n] [-f]
+       $PROG local {user|repo|diff|list} [-n] [-f]
 
 commands:
   user    install: repo -> \$HOME       (existing files are backed up first)
@@ -47,6 +50,7 @@ commands:
   diff    show what differs between repo and \$HOME; changes nothing
   list    print the managed files and exit
   tmux    install Oh my tmux! into ~/.tmux, or update it
+  local   prefix: run the next command on the per-machine files instead
   help    this text
 
 options:
@@ -57,9 +61,13 @@ examples:
   ./$PROG user -n     preview an install
   ./$PROG diff        review drift before collecting
   ./$PROG repo        pull your live configs back into the repo
+  ./$PROG local diff  compare this machine's .local files with the stubs
 
 Backups go to \$HOME/.dotfiles-backup/<timestamp>/ mirroring the original
 paths, so restoring is a plain copy back.
+
+The per-machine files ('$PROG local list') differ from host to host on
+purpose, so every command skips them unless it is prefixed with 'local'.
 EOF
 }
 
@@ -96,7 +104,16 @@ filter_managed() {
 # The git index is the source of truth: a config is deployed once it is
 # tracked, so untracked scratch files are never installed into $HOME. Falls
 # back to a filesystem scan when the repo is used outside git.
+#
+# Under `local` the list is the hand-copied files instead, and nothing else.
 list_files() {
+    if [ "$HAND_COPY" -eq 1 ]; then
+        for found in $HAND_COPY_FILES; do
+            [ -f "$found" ] || continue
+            printf '%s\n' "$found"
+        done
+        return 0
+    fi
     if have_git; then
         git ls-files -z | tr '\0' '\n'
     else
@@ -107,6 +124,7 @@ list_files() {
 # A new config that was never `git add`ed would be skipped without a word.
 # Say so once, rather than letting it look deployed.
 hint_untracked() {
+    [ "$HAND_COPY" -eq 0 ] || return 0
     have_git || return 0
     untracked=$(git ls-files --others --exclude-standard -z | tr '\0' '\n' |
         filter_managed | tr '\n' ' ')
@@ -346,6 +364,17 @@ cmd_tmux() {
 
 COMMAND=$1
 shift
+
+# `local` is a prefix: the command after it acts on HAND_COPY_FILES instead.
+if [ "$COMMAND" = local ]; then
+    HAND_COPY=1
+    COMMAND=${1-}
+    [ $# -gt 0 ] && shift
+    case $COMMAND in
+        user | repo | diff | list) ;;
+        *) warn "local takes one of: user, repo, diff, list"; usage >&2; exit 2 ;;
+    esac
+fi
 
 while [ $# -gt 0 ]; do
     case $1 in
