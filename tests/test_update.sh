@@ -32,8 +32,8 @@ if [ ! -f "$UPDATE_SH" ]; then
 fi
 
 # The per-machine files, as update.sh names them in HAND_COPY_FILES.
-HAND_COPY=".bashrc.local .zshrc.local .mega.d/local.el .gitconfig.local
-.gitconfig.signing"
+HAND_COPY=".bashrc.local .zshrc.local .mega.d/local.el .mega2.d/local.el
+.gitconfig.local .gitconfig.signing"
 
 # Where update.sh clones Oh my tmux! from. Read from the script, so that the
 # `tmux` tests redirect the very URL it uses.
@@ -597,7 +597,7 @@ test_local_list_prints_the_per_machine_files() {
     for stub in $HAND_COPY; do
         assert_out "$stub"
     done
-    [ "$(wc -l < "$OUT")" -eq 5 ] || fail "stdout lists something else too"
+    [ "$(wc -l < "$OUT")" -eq 6 ] || fail "stdout lists something else too"
 }
 
 test_local_list_skips_a_stub_the_repo_lacks() {
@@ -611,7 +611,8 @@ test_local_list_skips_a_stub_the_repo_lacks() {
 test_local_user_installs_the_per_machine_files_only() {
     run local user
     assert_exit 0
-    assert_out "  create  .mega.d/local.el" "Done: 5 file(s) changed."
+    assert_out "  create  .mega.d/local.el" "  create  .mega2.d/local.el" \
+        "Done: 6 file(s) changed."
     assert_holds "$HOME/.mega.d/local.el" 'stub .mega.d/local.el'
     assert_holds "$HOME/.gitconfig.signing" 'stub .gitconfig.signing'
     assert_absent "$HOME/.rc"
@@ -631,7 +632,7 @@ test_local_user_dry_run_writes_nothing() {
     put "$HOME/.gitconfig.signing" 'this machine only'
     run local user -n
     assert_exit 0
-    assert_out "  update  .gitconfig.signing" "Done: 5 file(s) would change."
+    assert_out "  update  .gitconfig.signing" "Done: 6 file(s) would change."
     assert_holds "$HOME/.gitconfig.signing" 'this machine only'
     assert_absent "$HOME/.bashrc.local"
     assert_no_backup

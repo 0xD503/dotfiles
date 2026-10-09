@@ -31,8 +31,8 @@ CHANGES=0
 # machine keeps in them, and collecting would push one machine's overrides to
 # all the others. Only the `local` prefix reaches them, and only on request.
 EXCLUDES="update.sh tests README.md LICENSE .gitignore"
-HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .gitconfig.local \
-.gitconfig.signing"
+HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .mega2.d/local.el \
+.gitconfig.local .gitconfig.signing"
 EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
 
 # Oh my tmux!, the tmux config that the tracked .tmux.conf.local customizes.

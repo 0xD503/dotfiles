@@ -9,3 +9,5 @@
 .mega.d/var/
 .mega.d/eln-cache/
 .mega.d/elpa/
+.mega2.d/eln-cache/
+.mega2.d/elpa/
