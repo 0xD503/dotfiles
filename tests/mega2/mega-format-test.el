@@ -50,6 +50,23 @@
           (should (mega-trust-p dir t))
           (should (= asked 1)))))))
 
+(ert-deftest mega-trust-deciding-first-thing-in-a-session-keeps-earlier-answers ()
+  "The stored answers are read before one is added, not replaced by it."
+  (mega-format-test--trust-store
+    (mega-test-with-directory dir
+      (let ((one (expand-file-name "one/" dir))
+            (two (expand-file-name "two/" dir))
+            (inhibit-message t))
+        (make-directory one)
+        (make-directory two)
+        (let ((default-directory one)) (mega-trust-project))
+        ;; A new session: nothing has been read yet.
+        (setq mega-trust--decisions 'unread)
+        (let ((default-directory two)) (mega-distrust-project))
+        (setq mega-trust--decisions 'unread)
+        (should (eq (mega-trust-decision one) 'trusted))
+        (should (eq (mega-trust-decision two) 'untrusted))))))
+
 (ert-deftest mega-trust-a-no-is-remembered-too ()
   (mega-format-test--trust-store
     (mega-test-with-directory dir
@@ -97,7 +114,11 @@
 
 (defmacro mega-format-test--with-formatter (script &rest body)
   "Run BODY with a formatter for text files that is the shell SCRIPT.
-The project is trusted.  DIR is bound to a fresh directory."
+The project is trusted.  DIR is bound to a fresh directory.
+
+SCRIPT must read its input, or stay alive.  A batch Emacs, unlike the one
+you edit in, is killed outright when it writes to a program that has
+closed its input: the whole test run would end without a word."
   (declare (indent 1))
   `(mega-test-with-directory dir
      (let* ((bin (expand-file-name "bin/" dir))
@@ -183,7 +204,7 @@ The project is trusted.  DIR is bound to a fresh directory."
       (should (looking-at-p "here")))))
 
 (ert-deftest mega-format-a-failing-formatter-changes-nothing ()
-  (mega-format-test--with-formatter "echo 'broken output'; echo 'syntax error on line 3' >&2; exit 1"
+  (mega-format-test--with-formatter "cat > /dev/null; echo 'broken output'; echo 'syntax error on line 3' >&2; exit 1"
     (with-temp-buffer
       (text-mode)
       (insert "precious\n")
@@ -194,7 +215,7 @@ The project is trusted.  DIR is bound to a fresh directory."
 
 (ert-deftest mega-format-a-formatter-that-prints-nothing-changes-nothing ()
   "Empty output is a formatter that did not work, not an empty file."
-  (mega-format-test--with-formatter "exit 0"
+  (mega-format-test--with-formatter "cat > /dev/null; exit 0"
     (with-temp-buffer
       (text-mode)
       (insert "precious\n")
@@ -244,7 +265,7 @@ The project is trusted.  DIR is bound to a fresh directory."
         (should (equal (mega-format-test--save file "two\n") "one\ntwo\n"))))))
 
 (ert-deftest mega-format-a-failing-formatter-never-stops-the-save ()
-  (mega-format-test--with-formatter "exit 1"
+  (mega-format-test--with-formatter "cat > /dev/null; exit 1"
     (let ((file (mega-test-write (expand-file-name "a.txt" dir) "one" "")))
       (should (equal (mega-format-test--save file "two\n") "one\ntwo\n")))))
 

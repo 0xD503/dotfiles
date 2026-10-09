@@ -4,17 +4,15 @@ A terminal-first Emacs configuration that needs nothing but Emacs 31.1: no
 packages, no downloads. This page is the whole user guide. How and why it is
 built is in [DESIGN.md](DESIGN.md).
 
-> **Status: milestone 0.** The foundation is here: safe defaults, the theme,
-> modeline, ruler, history, the doctor and the cheat sheet. Search, the file
-> finder, completion, the language server and the rest arrive milestone by
-> milestone; DESIGN.md lists them.
-
 ## Start
 
 ```sh
 emacs                                  # if MEGA 2.0 is your default chemacs2 profile
 emacs --init-directory ~/.mega2.d      # anywhere else
 ```
+
+Without a file, Emacs opens on a home page: `r` continues where you left off,
+`1`–`9` open a recent project, and the first line says how long start-up took.
 
 Then, once:
 
@@ -25,29 +23,67 @@ C-c ?                every MEGA key, on one screen
 
 ## Keys
 
-`C-` is Ctrl, `M-` is Alt. `C-c ?` always shows the current, complete list of
-MEGA's own keys; these are the ones to know on day one.
+`C-` is Ctrl, `M-` is Alt. `C-c ?` always shows the complete, current list;
+these are the ones to know. Pause after a prefix such as `C-c c` and Emacs
+lists what can follow.
 
 | Key | Does |
 | --- | --- |
 | `C-c ?` | The cheat sheet |
-| `M-x mega-doctor` | Health report |
-| `C-x C-f` | Open a file |
-| `C-x C-s` | Save |
-| `C-x b` | Switch buffer |
+| `C-c h` | The home page |
+| `C-c p f` | Open a file of the project: type any part of its name |
+| `M-g a` | Search the project as you type (`M-g s`: the symbol at point) |
+| `C-c t` | Show or hide the file tree |
+| `M-.` | Go to the definition (`M-,` goes back, `M-?` lists the uses) |
+| `C-c d` | Documentation for the thing at point |
+| `C-c c r` | Rename everywhere (`C-c c a`: fixes, `C-c c f`: format) |
+| `C-c c n` | Next problem (`C-c c e`: list them) |
+| `C-c x b` | Build (`C-c x r` run, `C-c x t` test, `C-c x x` choose a task) |
+| `C-c g g` | Start the debugger (`C-c g b` breakpoint, `r` run, `n` step, `c` continue) |
+| `C-c k u` | Join the project's dev container (`C-c k d` leaves it) |
+| `C-c l c` | Claude session for the project (`C-c l a` ask, `r` rewrite, `e` explain) |
+| `C-x u` | The undo history as a tree |
+| `C-c w s` | Save the files and windows on screen (`C-c w r` brings them back) |
+| `C-c s` | Insert a snippet |
+| `C-/` | Undo (`C-M-_` redoes) |
 | `C-g` | Cancel whatever is happening |
-| `C-/` | Undo |
-| `C-M-_` | Redo |
-| `C-s` | Search in the buffer |
-| `M-%` | Search and replace |
-| `C-x p f` | Open a file in the project |
-| `C-x p g` | Search the project |
-| `M-{` / `M-}` | Make the window narrower / wider |
-| `C-c <left>` | Back to the previous window layout |
 | `C-h k` | What does this key do? |
-| `C-x C-c` | Quit |
 
-Pause after a prefix such as `C-x` and Emacs lists what can follow.
+In code, `C-c C-c` comments or uncomments, and `M-n` / `M-p` jump between the
+uses of the symbol at point.
+
+**The completion menu** appears as you type. `TAB` takes a candidate, `C-n` /
+`C-p` choose, `C-g` closes it; nothing is ever inserted unasked.
+
+**In the search prompt**, `C-o ?` shows the settings and `C-o` plus a letter
+changes one (`c` case, `u` untracked files, `h` hidden, `w` whole words, `e`
+export the hits to an editable buffer). `needle -- src/*.rs` searches part of
+the project.
+
+## What needs what
+
+Everything outside Emacs is optional: without it the feature stays quiet and
+`M-x mega-doctor` says what is missing.
+
+| For | Install |
+| --- | --- |
+| Fast search | `rg` (else `git grep`, else `grep`) |
+| Go to definition, rename, problems as you type | the language's server, e.g. `rust-analyzer`, `clangd` |
+| Format on save | the language's formatter, e.g. `rustfmt`, `clang-format`, `ruff` |
+| Debugging | `gdb` or `lldb`; Python brings `pdb` |
+| Dev containers | `podman` or `docker`; the `devcontainer` CLI if you have it |
+| Claude | the `claude` program, signed in |
+
+Syntax highlighting for some languages wants a parser; Emacs offers to build
+it the first time you open such a file.
+
+## Trust
+
+A language server, a formatter, a task, a debugger or a container all run
+code that comes with the project. The first time one is needed MEGA asks
+once whether you trust the project, and remembers. Until then the project is
+only edited. `M-x mega-trust-project` and `M-x mega-distrust-project` change
+the answer.
 
 ## Where a setting goes
 
@@ -56,23 +92,26 @@ Pause after a prefix such as `C-x` and Emacs lists what can follow.
 | Change something on this machine only | `local.el` |
 | Add or rebind a key | one row in `lisp/mega-keys.el` |
 | Change a global default | `lisp/mega-core.el` |
+| Add a language, formatter, task or snippet | its table, named at the top of the module |
 | Remove a feature | delete its line in `init.el` |
 
 `local.el` is never overwritten by a plain `./update.sh` command; install it
-once with `./update.sh local user`.
+once with `./update.sh local user`. A project's `.editorconfig` sets its
+indentation and line endings and moves the ruler (`max_line_length`).
 
-The ruler sits at column 80. A project's `.editorconfig` moves it
-(`max_line_length`) and sets indentation and line endings for its files.
-
-## What MEGA does for you without asking
+## What MEGA does without asking, and what it never does
 
 - **Keeps your work.** Backups and auto-saves are on, stored away from your
-  projects. Deleting a file from Emacs moves it to the trash.
-- **Keeps your data on the machine.** MEGA makes no network connection and
-  has no telemetry. What you copy is never written to disk, and files such as
-  `.env`, keys and anything under `~/.ssh` are left out of recent files.
+  projects. Deleting a file moves it to the trash. Undo history survives
+  closing the file and restarting Emacs.
+- **Keeps your data on the machine.** MEGA opens no network connection and
+  has no telemetry. What you copy is never written to disk. Files such as
+  `.env`, keys and anything under `~/.ssh` are left out of recent files and
+  of stored undo history.
+- **Sends text to Claude only when you press a Claude key**, and only the
+  text you selected; a private file needs a typed "yes" first.
 - **Does not trust a repository.** Opening a file cannot run code: unsafe
-  file-local variables and `eval:` lines are ignored.
+  file-local variables and `eval:` lines are ignored, and see Trust above.
 
 Everything MEGA remembers lives in `~/.local/state/mega2` and
 `~/.cache/mega2`, readable only by you. Deleting the cache loses nothing you
@@ -81,13 +120,11 @@ cannot rebuild offline. `~/.mega2.d` itself is never written to.
 ## When something breaks
 
 A module that fails to load is skipped and reported; the rest keeps working.
-`M-x mega-doctor` lists what failed, how long each module took, and whether
-the safety settings above are really in force.
+`M-x mega-doctor` lists what failed, how long each module took, which
+programs it found, and whether the promises above are really in force.
 
-`M-x mega-keys-mode` turns every MEGA key off, leaving stock Emacs.
-
-On an Emacs older than 31.1 MEGA configures nothing and says so, leaving a
-plain, working Emacs.
+`M-x mega-keys-mode` turns every MEGA key off, leaving stock Emacs. On an
+Emacs older than 31.1 MEGA configures nothing and says so.
 
 ## Tests
 

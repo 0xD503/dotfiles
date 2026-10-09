@@ -9,6 +9,10 @@
 ;;
 ;; It reports.  It never installs, never connects, and runs no program.
 ;;
+;; It does load every module, including those that normally wait for their
+;; first use.  A module that cannot load is exactly what the doctor is for,
+;; and each module brings the section that describes it.
+;;
 ;; The report is a list of sections.  The ones below describe Emacs and MEGA
 ;; itself; a feature module adds its own by putting a function on
 ;; `mega-doctor-sections' (defined in mega-lib.el, so that doing so does not
@@ -23,6 +27,23 @@
 
 (defconst mega-doctor-tools '("git" "rg" "fd" "fdfind" "cc")
   "Optional programs the base reports on.  Feature modules report their own.")
+
+(defvar mega-doctor--lazy nil
+  "What became of each module that loads on first use: (MODULE . STATE).
+STATE is `used' if it was loaded already, `idle' if the doctor loaded
+it, or the message of the error loading it raised.")
+
+(defun mega-doctor--load-lazy-modules ()
+  "Load the modules that wait for their first use, noting how that went."
+  (setq mega-doctor--lazy
+        (mapcar (lambda (entry)
+                  (let ((module (car entry)))
+                    (cons module
+                          (cond ((featurep module) 'used)
+                                (t (condition-case err
+                                       (progn (require module) 'idle)
+                                     (error (error-message-string err))))))))
+                (reverse mega-lazy-modules))))
 
 (defun mega-doctor-heading (text)
   "Insert TEXT as a section heading."
@@ -84,11 +105,16 @@ Returns OK, so callers can count problems."
   (dolist (entry (sort (copy-sequence mega-module-times)
                        (lambda (a b) (> (cdr a) (cdr b)))))
     (insert (format "    %-24s %6.1f ms\n" (car entry) (cdr entry))))
-  (when mega-lazy-modules
+  (when mega-doctor--lazy
     (insert "\n  Loaded on first use:\n")
-    (dolist (entry (reverse mega-lazy-modules))
-      (insert (format "    %-24s %s\n" (car entry)
-                      (if (featurep (car entry)) "loaded" "not yet")))))
+    (dolist (entry mega-doctor--lazy)
+      (insert (format "    %-24s " (car entry))
+              (pcase (cdr entry)
+                ('used "in use")
+                ('idle "not used yet")
+                (message (propertize (concat "FAILS TO LOAD: " message)
+                                     'face 'error)))
+              "\n")))
   (when mega-module-failures
     (insert (propertize "\n  Modules that FAILED to load:\n" 'face 'error))
     (dolist (failure (reverse mega-module-failures))
@@ -139,6 +165,7 @@ Every row is read from the running Emacs, not asserted."
 (defun mega-doctor--insert ()
   "Insert the whole report at point."
   (insert (propertize "MEGA doctor\n" 'face '(bold underline)))
+  (mega-doctor--load-lazy-modules)
   (dolist (section (append '(mega-doctor--emacs mega-doctor--startup
                              mega-doctor--safety mega-doctor--tools)
                            mega-doctor-sections))

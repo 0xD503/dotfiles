@@ -216,5 +216,26 @@ result up by themselves."
                  (string-trim (concat (plist-get result :error)
                                       (plist-get result :output))))))))
 
+;;;; The doctor
+
+(declare-function mega-doctor-heading "mega-doctor")
+(declare-function mega-doctor-row "mega-doctor")
+
+(defun mega-format--doctor ()
+  "Insert the doctor's section about formatters."
+  (mega-doctor-heading "Formatters")
+  (dolist (entry mega-formatters)
+    (let* ((programs (mapcar #'car (cdr entry)))
+           (found (seq-find #'mega-exe-p programs)))
+      (mega-doctor-row (replace-regexp-in-string
+                        "\\(?:-ts\\)?-mode\\'" "" (symbol-name (caar entry)))
+                       (if found
+                           (format "%s  (on save, in a trusted project)" found)
+                         (format "not found: %s" (string-join programs ", ")))
+                       (unless found 'shadow))))
+  (insert "\n  Without its formatter a file is saved as you wrote it.\n"))
+
+(add-to-list 'mega-doctor-sections #'mega-format--doctor t)
+
 (provide 'mega-format)
 ;;; mega-format.el ends here

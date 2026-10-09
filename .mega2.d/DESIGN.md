@@ -63,8 +63,11 @@ Examples of that ordering already decided:
 2. **Privacy — nothing leaves the machine unless you ask.**
    - MEGA opens no network connection and has no telemetry. The only
      sanctioned download is Emacs's parser prompt, after you answer yes.
-   - Code goes to Claude only on an explicit command, and only the region or
-     buffer you chose.
+   - Code goes to Claude only on an explicit command, and only the text you
+     selected (or the function at point); on standard input, never on a
+     command line; a private file needs a typed "yes".
+   - gdb's debuginfod lookups, which name what you debug to a server, are
+     off.
    - Language servers get telemetry switched off where they offer a switch.
    - State directories are 0700. The kill ring is never saved. Files matched
      by `mega-private-file-p` are left out of recent files, saved places and
@@ -79,12 +82,19 @@ Examples of that ordering already decided:
      answer, and in an untrusted project only edits text.
    - A further prompt, tied to the file's hash, before anything from
      `devcontainer.json` runs.
+   - A one-shot Claude question never runs in the project: `claude --print`
+     skips that program's own trust question, and a project can carry
+     settings that run commands. It runs in an empty directory with tools,
+     MCP servers and project settings off.
+   - Stored undo history is data: read, checked record by record, never
+     evaluated. Records that call functions are neither written nor accepted.
    - Processes get argument lists, never shell strings built from file names
      or search input.
 4. **Stability.**
    - A module that fails to load is skipped and reported.
-   - Built-ins only; the two places that will touch eglot internals are
-     isolated, tested, and reported by the doctor if they change.
+   - Built-ins only. The places that lean on something Emacs keeps for
+     itself — eglot's snippet hook, `undo-equiv-table` — are isolated,
+     tested, and reported by the doctor if they change.
    - The configuration directory is read-only at runtime.
 5. **Extensibility.** Keys, languages, formatters, tasks, snippets, picker
    sources and doctor sections are data tables or lists; machine overrides go
@@ -122,8 +132,9 @@ project shell; editable grep results; GUD debuggers (gdb, lldb, pdb).
 | Format on save | editorconfig, then the language server or the language's own tool (rustfmt on the buffer; `cargo fmt` project-wide) |
 | Snippets | LSP-syntax tab stops; user snippets per mode |
 | Dev Containers | See below |
-| Claude | Project session in a terminal buffer; `claude -p` for send, rewrite, explain |
-| Undo | Tree visualiser over built-in undo; history persisted per file |
+| Claude | Project session in a tmux pane or a terminal buffer; one-shot ask, explain and rewrite-with-diff through `claude --print` |
+| Undo | Tree drawn from Emacs's own undo list; history persisted per file |
+| Debugging | Picks the GUD front end and the program for the project; one set of keys for gdb, lldb and pdb |
 | Workspaces | Named tab layouts saved and resumed |
 | Small helpers | Indent guides, TODO highlight, symbol jump, trim changed lines, clipboard bridge |
 | Modes | Markdown, Zig, justfile, Rust fallback |
@@ -146,10 +157,11 @@ compose without the official CLI; RON mode; anything GUI-specific.
     base      mega-lib  mega-core  mega-keys  mega-ui  mega-nord-theme
               mega-session  mega-help  mega-doctor
     kit       mega-popup  mega-pick  mega-exec                      (M1, M2)
-    features  mega-complete  mega-project  mega-search  mega-edit
-              mega-indent-guides  mega-undo  mega-snippet  mega-format
+    features  mega-complete  mega-project  mega-workspace  mega-home
+              mega-search  mega-edit  mega-indent-guides  mega-trust
+              mega-undo  mega-undo-tree  mega-snippet  mega-format
               mega-lsp  mega-lang  mega-task  mega-debug  mega-container
-              mega-remote  mega-llm  mega-zone                      (M1–M6)
+              mega-remote  mega-llm  mega-zone                      (M1–M5)
     modes     mega-mode-markdown  mega-mode-zig  mega-mode-just  mega-mode-rust
 tests/mega2/      ERT suite and the two start-up probes (not deployed)
 tests/test_mega2.sh
@@ -180,6 +192,20 @@ tests/test_mega2.sh
   securityOpt, env, remoteUser, ports, lifecycle commands; anything else is
   refused by name). Files stay on the host and tools run in the container,
   with one path-mapping layer; container-only files open through TRAMP.
+- **Undo has no data structure of its own.** The tree is read off
+  `buffer-undo-list` and `undo-equiv-table` each time it is drawn, and a
+  move is a replay of the records between two states, recorded like any
+  other change. The only thing that could ever be wrong is the claim "the
+  text is now in that older state", so it is made only when the replay ran
+  exactly from one state to the other. Two consequences, both deliberate:
+  Emacs's "undone all the way back" is not believed (it does not say back
+  to where, and Emacs discards old history), so that state is drawn as a
+  node of its own; and MEGA's own mark for the oldest state is dropped the
+  moment the end of the list changes.
+- **Programs that take long** (`claude --print`) go through
+  `mega-exec-start`, which returns at once and calls back; a mistake in the
+  callback is reported, not raised, because it runs in the middle of
+  whatever else is happening.
 
 ## Milestones
 
@@ -191,8 +217,8 @@ tests/test_mega2.sh
 | M2 | Popup, completion menu, eglot, language table, parser prompt, the four modes | done |
 | M3 | Project trust, format on save, snippets, tasks, indent guides, small edit helpers | done |
 | M4 | Dev Containers: native subset, hand-over to the official CLI | done |
-| M5 | GUD debugging, Claude, undo tree + persistence, remote, zone | |
-| M6 | DAP client (optional) | |
+| M5 | GUD debugging, Claude, undo tree + persistence, remote, zone | done |
+| M6 | DAP client (optional) | not started |
 
 Each milestone ends with its unit tests, doctor rows and guide entries.
 
@@ -218,6 +244,14 @@ Three things learned while building it, worth keeping in mind:
   test scans MEGA's source for plain `setq` on such variables.
 - Emacs makes no backups under the temporary directory, which is where the
   sandbox lives; tests that need one lift that rule explicitly.
+- In batch mode an error in a process sentinel ends Emacs, and with it the
+  whole test run, silently. Code that runs in a sentinel catches its errors.
+- ERT runs tests with `debug-on-error` on, which lets errors through
+  `with-demoted-errors`. A test of "this failure is only a message" has to
+  switch it off.
+- Tests are worth only what they can fail on. Each milestone's safety,
+  privacy and security checks were run against deliberately broken copies
+  of the code (`MEGA_TEST_CONFIG` points the suite at a copy).
 
 ## Open points
 
@@ -227,7 +261,18 @@ Three things learned while building it, worth keeping in mind:
   background the first time each is loaded. That is Emacs, not MEGA, and it
   is left on; the boot test switches it off to listen for MEGA alone.
 - **Parsers.** An Emacs built against tree-sitter 0.20 accepts ABI 13–14 only.
-- **Claude in the built-in terminal emulator** may render imperfectly; the
-  fallback is a tmux split.
+- **Claude in the built-in terminal emulator** may render imperfectly. Inside
+  tmux the session opens in a pane instead, which is the default there.
+  Neither has been tried against the real program by the tests, which use a
+  stand-in. The arguments of `mega-claude-print-arguments` are taken from
+  the program's own help and their values pass its checks, but no question
+  has been sent with them: that would have been a request nobody asked for.
+- **Debugging in a container** uses gdb's plain interface (`gud-gdb`), since
+  the full one wants a terminal of the host for the program's input and
+  output. Beyond the stand-ins of the suite it was run once for real: gdb
+  16.3 inside a container made from a `devcontainer.json`, breakpoint set
+  from the host buffer, the arrow following in the host file.
+- **Undo tree extras** left out: a diff between two states, and marking the
+  state that is saved on disk.
 - **One ruler.** Emacs draws a single ruler; several at once would be new code.
-- **DAP** is the largest single piece and may slip past 2.0.
+- **DAP** is the largest single piece and has not been started.

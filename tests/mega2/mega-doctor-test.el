@@ -73,8 +73,27 @@
   (let ((report (mega-doctor-test--report)))
     (dolist (module '("mega-core" "mega-ui" "mega-keys" "mega-session"))
       (should (string-match-p (concat module " +[0-9.]+ ms") report)))
-    (should (string-match-p "mega-doctor +loaded" report))
-    (should-not (string-match-p "FAILED" report))))
+    (should (string-match-p "mega-doctor +in use" report))
+    (should-not (string-match-p "FAILED\\|FAILS" report))))
+
+(ert-deftest mega-doctor-loads-every-module-and-shows-its-section ()
+  "The doctor is where a module that cannot load has to show up."
+  (let ((report (mega-doctor-test--report)))
+    (dolist (entry mega-lazy-modules)
+      (should (featurep (car entry))))
+    (dolist (heading '("Languages" "Undo" "Formatters" "Snippets" "Debuggers"
+                       "Claude" "Dev containers"
+                       "Projects that may run their own tools"))
+      (should (string-match-p (concat "\n" (regexp-quote heading) "\n") report)))
+    (should-not (string-match-p "could not report" report))))
+
+(ert-deftest mega-doctor-says-when-a-module-cannot-load ()
+  (let* ((mega-lazy-modules (cons '(mega-test-no-such-module mega-test-command)
+                                  mega-lazy-modules))
+         (report (mega-doctor-test--report)))
+    (should (string-match-p "mega-test-no-such-module +FAILS TO LOAD: " report))
+    ;; The rest of the report is still there.
+    (should (string-match-p "\nOptional programs\n" report))))
 
 (ert-deftest mega-doctor-lists-a-module-that-failed ()
   (let* ((mega-module-failures '((mega-test-broken . "deliberately broken")))

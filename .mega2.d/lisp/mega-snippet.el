@@ -301,5 +301,26 @@ Lines after the first are indented like the line it is inserted on."
     (advice-add 'eglot--snippet-expansion-fn :override
                 #'mega-snippet--expander-for-eglot)))
 
+;;;; The doctor
+
+(declare-function mega-doctor-heading "mega-doctor")
+(declare-function mega-doctor-row "mega-doctor")
+(declare-function mega-doctor-check "mega-doctor")
+
+(defun mega-snippet--doctor ()
+  "Insert the doctor's row about completions that are snippets.
+That is the one place MEGA reaches into eglot rather than using it."
+  (mega-doctor-heading "Snippets")
+  (if (not (featurep 'eglot))
+      (mega-doctor-row "from the language server"
+                       "checked once a language server has started")
+    (mega-doctor-check "from the language server"
+                       (advice-member-p #'mega-snippet--expander-for-eglot
+                                        'eglot--snippet-expansion-fn)
+                       "expanded by MEGA"
+                       "eglot has changed: such completions insert as plain text")))
+
+(add-to-list 'mega-doctor-sections #'mega-snippet--doctor t)
+
 (provide 'mega-snippet)
 ;;; mega-snippet.el ends here

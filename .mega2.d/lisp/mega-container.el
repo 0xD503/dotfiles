@@ -645,5 +645,26 @@ Volumes are kept."
                    "Not using a container.  This project has one: C-c k u starts it"
                  "Not using a container, and this project describes none")))))
 
+;;;; The doctor
+
+(declare-function mega-doctor-heading "mega-doctor")
+(declare-function mega-doctor-row "mega-doctor")
+
+(defun mega-container--doctor ()
+  "Insert the doctor's section about dev containers."
+  (mega-doctor-heading "Dev containers")
+  (let ((engine (mega-container-engine))
+        (cli (mega-exe-p "devcontainer")))
+    (mega-doctor-row "container program"
+                     (or engine "not found: podman, docker")
+                     (unless engine 'shadow))
+    (mega-doctor-row "devcontainer CLI"
+                     (cond (cli "found: it creates the containers")
+                           (engine "not found: MEGA creates them itself, from a subset")
+                           (t "not found"))
+                     (unless cli 'shadow))))
+
+(add-to-list 'mega-doctor-sections #'mega-container--doctor t)
+
 (provide 'mega-container)
 ;;; mega-container.el ends here

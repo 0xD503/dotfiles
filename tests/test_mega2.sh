@@ -116,11 +116,24 @@ stage_unit() {
     for file in "$TESTS"/*-test.el; do
         set -- "$@" -l "$file"
     done
-    if out=$("$EMACS" -Q --batch -L "$TESTS" -l mega-test-helper "$@" \
-                -f ert-run-tests-batch-and-exit 2>&1); then
+    out=$("$EMACS" -Q --batch -L "$TESTS" -l mega-test-helper "$@" \
+                -f ert-run-tests-batch-and-exit 2>&1)
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
         ok "unit  $(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9]* tests\), \([0-9]* results as expected\).*/\1, \2/p')"
     else
         bad "unit"
+        # A batch Emacs can end without a word: an error in a process
+        # sentinel does it, and so does writing to a program that has
+        # closed its input (signal 13).  Say so, and where it got to.
+        if ! printf '%s\n' "$out" | grep -q '^Ran [0-9]* tests'; then
+            last=$(printf '%s\n' "$out" |
+                sed -n 's/^ *passed *[0-9]*\/[0-9]* *\([^ ]*\).*/\1/p' | tail -n 1)
+            how="exit $rc"
+            [ "$rc" -le 128 ] || how="killed by signal $((rc - 128))"
+            printf 'Emacs ended before the tests did (%s); the last test to pass was %s\n' \
+                "$how" "${last:-none}" | detail
+        fi
         # What failed and why.  Passing tests and backtraces are noise here.
         printf '%s\n' "$out" |
             awk '/^Test .* backtrace:$/ { skip = 1; next }
@@ -207,6 +220,15 @@ terminal_run() {
     if [ "$T_EXPECT" = supported ] && [ -f "$MEGA_TEST_REPORT" ] &&
         ! grep -q 'bebeta' "$SANDBOX/screen"; then
         printf 'problem: the completion menu was never drawn on the terminal\n' \
+            >> "$MEGA_TEST_REPORT"
+        rc=1
+    fi
+
+    # Likewise the undo tree: three changes draw as four states in a row,
+    # with box-drawing lines where the terminal has them.
+    if [ "$T_EXPECT" = supported ] && [ -f "$MEGA_TEST_REPORT" ] &&
+        ! grep -q -e 'o──o──o' -e 'o--o--o' "$SANDBOX/screen"; then
+        printf 'problem: the undo tree was never drawn on the terminal\n' \
             >> "$MEGA_TEST_REPORT"
         rc=1
     fi

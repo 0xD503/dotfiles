@@ -49,6 +49,9 @@
 
 (defun mega-trust--record (root trusted)
   "Record that ROOT is TRUSTED, or not."
+  ;; Read what is stored first: this may be the first trust question of the
+  ;; session, and the answers about other projects must survive it.
+  (mega-trust--decisions)
   (setf (alist-get root mega-trust--decisions nil nil #'equal) trusted)
   (let ((print-length nil) (print-level nil))
     (with-temp-file mega-trust-file
@@ -103,6 +106,30 @@ Tools that are already running are not stopped."
   (let ((root (mega-trust-root)))
     (mega-trust--record root nil)
     (message "No longer trusting %s" root)))
+
+;;;; The doctor
+
+(declare-function mega-doctor-heading "mega-doctor")
+(declare-function mega-doctor-row "mega-doctor")
+
+(defun mega-trust--doctor ()
+  "Insert the doctor's section about trusted projects."
+  (mega-doctor-heading "Projects that may run their own tools")
+  (let ((decisions (mega-trust--decisions)))
+    (mega-doctor-row "trusted"
+                     (number-to-string (seq-count #'cdr decisions)))
+    (mega-doctor-row "refused"
+                     (number-to-string (seq-count (lambda (entry) (not (cdr entry)))
+                                                  decisions)))
+    (mega-doctor-row "this one"
+                     (pcase (mega-trust-decision)
+                       ('trusted "trusted")
+                       ('untrusted "refused")
+                       (_ "not decided: MEGA asks when it first matters"))))
+  (insert "\n  Language servers, formatters, tasks, debuggers and containers\n"
+          "  run only in a trusted project.  M-x mega-trust-project decides.\n"))
+
+(add-to-list 'mega-doctor-sections #'mega-trust--doctor t)
 
 (provide 'mega-trust)
 ;;; mega-trust.el ends here

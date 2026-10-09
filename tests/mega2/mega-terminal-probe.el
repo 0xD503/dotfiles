@@ -199,6 +199,76 @@ must stay out of the way."
           (ignore-errors (tab-bar-close-other-tabs)))
       (error (mega-terminal-probe--problem "workspaces failed: %S" err)))))
 
+(defun mega-terminal-probe--processes ()
+  "Check that a program which stops reading its input is survived.
+Only a real session can tell: a batch Emacs is killed by such a write."
+  (declare-function mega-exec-run "mega-exec")
+  (condition-case err
+      (let ((result (mega-exec-run "sh" '("-c" "exec 0<&-; sleep 0.3; echo late")
+                                   :input (make-string 300000 ?x))))
+        ;; Not having taken its input, it counts as having failed.
+        (when (eql (plist-get result :status) 0)
+          (mega-terminal-probe--problem
+           "a program that refused its input was reported as a success")))
+    (error (mega-terminal-probe--problem
+            "a program that stopped reading raised %S" err))))
+
+(defun mega-terminal-probe--undo ()
+  "Check the undo tree on the live terminal.
+It opens under the text in this frame, moving in it changes the text,
+and cancelling puts both the text and the windows back.  The runner
+looks for the picture itself in what the terminal was sent."
+  (declare-function mega-undo-tree "mega-undo-tree")
+  (declare-function mega-undo-tree-backward "mega-undo-tree")
+  (declare-function mega-undo-tree-cancel "mega-undo-tree")
+  (condition-case err
+      (save-window-excursion
+        (unless (eq (key-binding (kbd "C-x u")) 'mega-undo-tree)
+          (mega-terminal-probe--problem "C-x u is %s" (key-binding (kbd "C-x u"))))
+        (delete-other-windows)
+        (switch-to-buffer (get-buffer-create "mega-probe-undo"))
+        (buffer-enable-undo)
+        (dolist (word '("one " "two " "three "))
+          (undo-boundary)
+          (insert word))
+        (undo-boundary)
+        (let ((windows (length (window-list)))
+              ;; The completion menu keeps its frame, hidden, to use again.
+              (frames (length (frame-list))))
+          (mega-undo-tree)
+          (redisplay t)
+          (unless (= (length (window-list)) (1+ windows))
+            (mega-terminal-probe--problem "the undo tree opened %s windows"
+                                          (- (length (window-list)) windows)))
+          (unless (= (length (frame-list)) frames)
+            (mega-terminal-probe--problem "the undo tree opened a frame"))
+          (unless (derived-mode-p 'mega-undo-tree-mode)
+            (mega-terminal-probe--problem "the undo tree did not take the cursor"))
+          (unless (eq (char-after) ?@)
+            (mega-terminal-probe--problem "the cursor is not on the current state"))
+          (unless (<= (window-total-height) 6)
+            (mega-terminal-probe--problem "a one-line tree got a window of %s lines"
+                                          (window-total-height)))
+          (mega-undo-tree-backward)
+          (redisplay t)
+          (unless (equal (with-current-buffer "mega-probe-undo" (buffer-string))
+                         "one two ")
+            (mega-terminal-probe--problem
+             "going back in the tree left %S"
+             (with-current-buffer "mega-probe-undo" (buffer-string))))
+          (mega-undo-tree-cancel)
+          (redisplay t)
+          (unless (equal (buffer-name) "mega-probe-undo")
+            (mega-terminal-probe--problem "after the tree the cursor is in %s"
+                                          (buffer-name)))
+          (unless (equal (buffer-string) "one two three ")
+            (mega-terminal-probe--problem "cancelling left %S" (buffer-string)))
+          (unless (= (length (window-list)) windows)
+            (mega-terminal-probe--problem "the undo tree window stayed")))
+        (set-buffer-modified-p nil)
+        (kill-buffer "mega-probe-undo"))
+    (error (mega-terminal-probe--problem "the undo tree failed: %S" err))))
+
 (defun mega-terminal-probe--supported ()
   "Check a session in which MEGA is expected to be fully configured."
   ;; First, before anything below changes what is on screen.
@@ -259,6 +329,8 @@ must stay out of the way."
     (mega-terminal-probe--problem "C-c ? is %s" (key-binding (kbd "C-c ?"))))
   (mega-terminal-probe--navigation)
   (mega-terminal-probe--completion)
+  (mega-terminal-probe--undo)
+  (mega-terminal-probe--processes)
   (when (and (equal (getenv "MEGA_TEST_LAUNCHER") "chemacs")
              (not (featurep 'chemacs)))
     (mega-terminal-probe--problem "chemacs was expected to have started this session")))

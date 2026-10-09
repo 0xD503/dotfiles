@@ -70,12 +70,24 @@
     mega-edit        ; comments, whitespace, pairs, the clipboard
     mega-snippet     ; templates with places to fill in
     mega-format      ; format on save
+    mega-undo        ; undo history that survives closing the file
+    mega-remote      ; files on another machine
+    mega-zone        ; a screensaver, if you want one
     ;; Loaded on first use.
     (mega-pick)      ; a prompt whose choices come from a program
     (mega-search :commands (mega-search-project mega-search-symbol))
     (mega-task   :commands (mega-task-build mega-task-run-project mega-task-test
                             mega-task-choose mega-task-again mega-task-stop))
     (mega-indent-guides :commands (mega-indent-guides-mode))
+    (mega-undo-tree :commands (mega-undo-tree))
+    (mega-debug  :commands (mega-debug mega-debug-run
+                            mega-debug-break mega-debug-remove
+                            mega-debug-next mega-debug-step mega-debug-finish
+                            mega-debug-until mega-debug-continue mega-debug-print
+                            mega-debug-up mega-debug-down mega-debug-quit))
+    (mega-llm    :commands (mega-claude mega-claude-send-region mega-claude-ask
+                            mega-claude-explain mega-claude-rewrite
+                            mega-claude-stop))
     (mega-container :commands (mega-container-up mega-container-detach
                                mega-container-stop mega-container-rebuild
                                mega-container-shell mega-container-info))

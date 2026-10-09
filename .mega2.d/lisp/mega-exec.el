@@ -16,6 +16,7 @@
 ;; * Responsiveness.  `mega-exec-run' waits for the program but stays
 ;;   interruptible: under `while-no-input' a keystroke abandons the wait, and
 ;;   the program is killed on the way out, never left running.
+;;   `mega-exec-start' does not wait at all, for a program that takes long.
 ;;
 ;; A context is a plist:
 ;;
@@ -78,6 +79,29 @@ Outside a container this is the identity."
 
 ;;;; Running a program and waiting for it
 
+(defun mega-exec--feed (process input)
+  "Send INPUT, if any, to PROCESS, and then the end of its input.
+A program may finish, or stop reading, before it has been sent
+everything; a quick one on a busy machine may be gone before it is sent
+anything.  Neither is an error here: what the program printed and how it
+ended are the answer, and the caller has both."
+  (condition-case nil
+      (progn
+        (when input
+          (process-send-string process input))
+        (process-send-eof process))
+    (error nil)))
+
+(defun mega-exec--drain (errors)
+  "Read the rest of a program's error output into the buffer ERRORS.
+The program has ended, but the last thing it wrote may still be on its
+way.  Wait for the end of it, briefly: something the program started
+may be holding the other end open for good."
+  (when-let* ((stderr (get-buffer-process errors)))
+    (let ((deadline (+ (float-time) 0.5)))
+      (while (and (process-live-p stderr) (< (float-time) deadline))
+        (accept-process-output stderr 0.01 nil t)))))
+
 (defun mega-exec--count-lines (buffer)
   "Number of complete lines in BUFFER."
   (with-current-buffer buffer
@@ -125,9 +149,7 @@ leaves this function and the program is killed."
           (when-let* ((stderr (get-buffer-process errors)))
             (set-process-query-on-exit-flag stderr nil)
             (set-process-sentinel stderr #'ignore))
-          (when input
-            (process-send-string process input))
-          (process-send-eof process)
+          (mega-exec--feed process input)
           (while (and (process-live-p process) (not stopped))
             (accept-process-output process 0.05)
             (cond ((and limit (>= (mega-exec--count-lines output) limit))
@@ -138,8 +160,7 @@ leaves this function and the program is killed."
               (delete-process process)
             ;; Collect whatever was still in the pipes when it exited.
             (while (accept-process-output process 0 nil t))
-            (when-let* ((stderr (get-buffer-process errors)))
-              (while (accept-process-output stderr 0 nil t))))
+            (mega-exec--drain errors))
           (list :status (unless stopped (process-exit-status process))
                 :output (with-current-buffer output (buffer-string))
                 :error (with-current-buffer errors (buffer-string))
@@ -150,6 +171,82 @@ leaves this function and the program is killed."
         (delete-process stderr))
       (kill-buffer output)
       (kill-buffer errors))))
+
+;;;; Running a program without waiting for it
+
+(defun mega-exec--finish (process)
+  "Hand the result of PROCESS to whoever started it, once."
+  (when-let* ((then (process-get process 'mega-exec-then)))
+    (process-put process 'mega-exec-then nil)
+    (let* ((output (process-buffer process))
+           (errors (process-get process 'mega-exec-errors))
+           (killed (not (eq (process-status process) 'exit))))
+      (unless killed
+        (mega-exec--drain errors))
+      (when-let* ((stderr (get-buffer-process errors)))
+        (delete-process stderr))
+      (let ((result
+             (list :status (unless killed (process-exit-status process))
+                   :output (if (buffer-live-p output)
+                               (with-current-buffer output (buffer-string))
+                             "")
+                   :error (if (buffer-live-p errors)
+                              (with-current-buffer errors (buffer-string))
+                            "")
+                   :stopped (and killed 'killed))))
+        (when (buffer-live-p output) (kill-buffer output))
+        (when (buffer-live-p errors) (kill-buffer errors))
+        ;; This runs whenever the program happens to end, in the middle of
+        ;; whatever you are doing: a mistake in THEN is reported, not raised.
+        (condition-case err
+            (funcall then result)
+          (error (message "MEGA: %s" (error-message-string err))))))))
+
+(defun mega-exec-start (program args &rest options)
+  "Start PROGRAM with ARGS and return its process at once.
+For a program that may take a while: Emacs stays usable, and the answer
+arrives later.  OPTIONS is a plist:
+
+  :directory  where to run it (default `default-directory')
+  :local      ignore any container context, see `mega-exec-command'
+  :input      a string to send on standard input
+  :then       function called once, with the result, when the program ends
+
+The result is the plist `mega-exec-run' returns; its :stopped is `killed'
+if the program was stopped, for instance by `mega-exec-stop'."
+  (let* ((directory (expand-file-name
+                     (or (plist-get options :directory) default-directory)))
+         (default-directory directory)
+         (input (plist-get options :input))
+         (output (generate-new-buffer " *mega-exec*" t))
+         (errors (generate-new-buffer " *mega-exec-stderr*" t))
+         (process
+          (make-process
+           :name "mega-exec"
+           :buffer output
+           :stderr errors
+           :command (mega-exec-command program args directory
+                                       (plist-get options :local))
+           :connection-type 'pipe
+           :coding 'utf-8-unix
+           :noquery t
+           :sentinel (lambda (process _event)
+                       (unless (process-live-p process)
+                         (mega-exec--finish process)))
+           :file-handler t)))
+    (process-put process 'mega-exec-then (or (plist-get options :then) #'ignore))
+    (process-put process 'mega-exec-errors errors)
+    (when-let* ((stderr (get-buffer-process errors)))
+      (set-process-query-on-exit-flag stderr nil)
+      (set-process-sentinel stderr #'ignore))
+    (mega-exec--feed process input)
+    process))
+
+(defun mega-exec-stop (process)
+  "Stop PROCESS, a program started with `mega-exec-start'.
+Its :then function is still called, with :stopped set."
+  (when (process-live-p process)
+    (delete-process process)))
 
 (defun mega-exec-lines (program args &rest options)
   "Run PROGRAM with ARGS and return its output as a list of lines.
