@@ -23,13 +23,14 @@ ERRORS=0
 CHANGES=0
 
 # Files that live in the repo but are not configuration to deploy.
-# Space-separated, compared literally against the repo-relative path.
+# Space-separated, compared literally against the repo-relative path. An entry
+# that is a directory, like tests, leaves out everything below it.
 #
 # The .local files are here as empty stubs to copy by hand. A plain command
 # must never deploy or collect them: deploying would overwrite whatever that
 # machine keeps in them, and collecting would push one machine's overrides to
 # all the others. Only the `local` prefix reaches them, and only on request.
-EXCLUDES="update.sh README.md LICENSE .gitignore"
+EXCLUDES="update.sh tests README.md LICENSE .gitignore"
 HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .gitconfig.local \
 .gitconfig.signing"
 EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
@@ -89,7 +90,9 @@ filter_managed() {
         [ -f "$found" ] || continue
         skip=0
         for pattern in $EXCLUDES; do
-            [ "$found" = "$pattern" ] && skip=1
+            case $found in
+                "$pattern" | "$pattern"/*) skip=1 ;;
+            esac
         done
         [ "$skip" -eq 1 ] && continue
         case $found in
