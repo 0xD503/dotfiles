@@ -128,6 +128,11 @@
 	cisfh = commit --signoff --fixup HEAD
 	ciasfh = commit --all --signoff --fixup HEAD
 	pltags = pull origin --tags
+	cissf = commit --signoff --gpg-sign --fixup
+	cissfh = commit --signoff --gpg-sign --fixup HEAD
+	ciassfh = commit --all --signoff --gpg-sign --fixup HEAD
+	ciassf = commit --all --signoff --gpg-sign --fixup
+	mgff = merge --ff
 [core]
 	editor = emacs -nw -q
 [init]
