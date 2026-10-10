@@ -193,6 +193,8 @@ unit_pass() {
     rc=$?
     if [ "$rc" -eq 0 ]; then
         ok "unit  $form: $(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9]* tests\), \([0-9]* results as expected\).*/\1, \2/p')"
+        # A test that did not run is not a test that passed: say which.
+        printf '%s\n' "$out" | sed -n 's/^ *SKIPPED *\([^ ]*\).*/skipped: \1/p' | sort -u | detail
     else
         bad "unit  $form"
         # A batch Emacs can end without a word: an error in a process
