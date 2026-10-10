@@ -76,10 +76,16 @@ a dev container MEGA shows the stack and the variables itself, in a window
 below, and `C-c g b` sets breakpoints before you start; that needs lldb's
 adapter (`lldb-dap`) or gdb 14 or newer in the container.
 
-**In the search prompt**, `C-o ?` shows the settings and `C-o` plus a letter
-changes one (`c` case, `u` untracked files, `h` hidden, `w` whole words, `e`
-export the hits to an editable buffer). `needle -- src/*.rs` searches part of
-the project.
+**Searching** (`M-g a`) is done by `git grep`, as a Perl regular expression,
+and the prompt says so. `C-o b` switches to ripgrep, then plain grep, then
+back, and the session stays with what you chose; `(setq mega-search-backend
+'rg)` in `local.el` makes ripgrep the one to start with. Outside a checkout
+`git grep` cannot search, and the next of the three that is installed does.
+
+`C-o ?` shows the settings and `C-o` plus a letter changes one: `c` case,
+`u` untracked files, `i` ignored files, `s` submodules, `h` hidden, `w` whole
+words, `e` export the hits to an editable buffer. `needle -- src/*.rs`
+searches part of the project.
 
 **A dev container** starts in the background: Emacs stays yours while it
 does, and `*mega-container*` shows each step. Before anything from
@@ -94,7 +100,7 @@ Everything outside Emacs is optional: without it the feature stays quiet and
 
 | For | Install |
 | --- | --- |
-| Fast search | `rg` (else `git grep`, else `grep`) |
+| Search | `git` in a checkout; `rg` or `grep` anywhere else |
 | Go to definition, rename, problems as you type | the language's server, e.g. `rust-analyzer`, `clangd` |
 | Format on save | the language's formatter, e.g. `rustfmt`, `clang-format`, `ruff` |
 | Debugging | `lldb` or `gdb`; Python brings `pdb` |

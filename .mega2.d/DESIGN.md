@@ -153,7 +153,7 @@ project shell; editable grep results; GUD debuggers (gdb, lldb, pdb).
 | Popup | Child-frame popup primitive |
 | Completion menu | Appears as you type; fed by the language server, snippets and the buffer |
 | Live picker | Minibuffer picker with async sources, in-place toggles, export |
-| Project search | `git grep -PnI` or `rg --hidden`; toggles for case, untracked, hidden, ignored, literal/word, file glob |
+| Project search | `git grep -PnI` by default, `rg --hidden` or `grep` one key away (`C-o b`, which lasts for the session); toggles for case, untracked, ignored, submodules, hidden, literal/word, file glob |
 | Project files | Emacs's own `C-c p f`, matching fuzzily. In a checkout the list is version control's; in a project without one MEGA lists it (`rg --files`, else `find`) and leaves out what a build made. Not cached |
 | Tasks | Build / run / test per project, with jump to error |
 | Format on save | editorconfig, then the language server or the language's own tool (rustfmt on the buffer; `cargo fmt` project-wide) |

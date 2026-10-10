@@ -5,11 +5,18 @@
 ;; `M-g a' searches the whole project and shows the hits while you type; RET
 ;; jumps to the highlighted one.  `M-g s' starts from the symbol at point.
 ;;
-;; The search is done by whichever of these exists, best first:
+;; The search is done by one of three programs, and the prompt says which:
 ;;
+;;   git      `git grep --perl-regexp --line-number -I': the default.  It
+;;            knows what the checkout tracks and ignores, and needs nothing
+;;            installed that the checkout does not need already.
 ;;   rg       ripgrep, with --hidden
-;;   git      `git grep --perl-regexp --line-number -I'
 ;;   grep     recursive GNU grep
+;;
+;; `git grep' can only search a checkout, so anywhere else the next of the
+;; three that is installed is used.  `C-o b' in the prompt switches to the
+;; next program, and the session stays with it; to start with another for
+;; good, in local.el:   (setq mega-search-backend 'rg)
 ;;
 ;; While the prompt is open, `C-o' followed by a letter changes how it
 ;; searches, and the list updates in place:
@@ -17,6 +24,7 @@
 ;;   C-o c    case: smart -> ignore -> sensitive
 ;;   C-o u    include untracked files           (git)
 ;;   C-o i    include files that are ignored
+;;   C-o s    search the submodules as well     (git)
 ;;   C-o h    include hidden files              (rg, grep)
 ;;   C-o l    take the pattern literally, not as a regular expression
 ;;   C-o w    match whole words only
@@ -39,10 +47,13 @@
 (require 'mega-project)
 (declare-function grep-mode "grep")
 
-(defcustom mega-search-backend 'auto
-  "Which program searches the project.
-`auto' takes the first of rg, git and grep that can be used."
-  :type '(choice (const auto) (const rg) (const git) (const grep))
+(defcustom mega-search-backend 'git
+  "The program that searches the project: `git', `rg' or `grep'.
+Where it cannot be used, the next of those three that can is: `git grep'
+searches a checkout and nothing else, and a program may not be installed.
+`C-o b' in the search prompt changes this for the session; set it in
+local.el to change it for good.  (`auto', an older value, means `git'.)"
+  :type '(choice (const git) (const rg) (const grep))
   :group 'mega)
 
 (defcustom mega-search-max-results 500
@@ -65,6 +76,9 @@
 `smart' means case matters only if the pattern contains a capital.")
 (defvar mega-search-untracked t "Non-nil to include files git does not track.")
 (defvar mega-search-ignored nil "Non-nil to include files that are ignored.")
+(defvar mega-search-submodules nil
+  "Non-nil to search the submodules of a checkout as well, with `git grep'.
+Git then searches what is tracked and nothing else: it will not do both.")
 (defvar mega-search-hidden t "Non-nil to include hidden files.")
 (defvar mega-search-literal nil "Non-nil to take the pattern literally.")
 (defvar mega-search-word nil "Non-nil to match whole words only.")
@@ -89,16 +103,22 @@ Set for a project without version control: see `mega-project-left-out'.")
     ('grep (mega-exec-find "grep" directory :local))))
 
 (defun mega-search-backends (directory)
-  "The search programs usable in DIRECTORY, best first."
-  (seq-filter (lambda (backend) (mega-search--usable-p backend directory))
-              '(rg git grep)))
+  "The search programs usable in DIRECTORY: the one you prefer first.
+That is `mega-search-backend', then the rest of git, rg and grep."
+  (let ((preferred (if (memq mega-search-backend '(git rg grep))
+                       mega-search-backend
+                     'git)))
+    (seq-filter (lambda (backend) (mega-search--usable-p backend directory))
+                (cons preferred (remq preferred '(git rg grep))))))
 
 (defun mega-search-backend-for (directory)
   "The search program to use in DIRECTORY, or nil if there is none."
-  (if (and (not (eq mega-search-backend 'auto))
-           (mega-search--usable-p mega-search-backend directory))
-      mega-search-backend
-    (car (mega-search-backends directory))))
+  (car (mega-search-backends directory)))
+
+(defun mega-search-backend-name (backend)
+  "What BACKEND is called where a person reads it."
+  (pcase backend
+    ('git "git grep") ('rg "ripgrep") ('grep "grep") (_ "no search program")))
 
 ;;;; Building the command
 
@@ -145,8 +165,10 @@ list: PATTERN and PATHS are passed as they are, never through a shell."
        `("git" "--no-pager" "grep" "--line-number" "-I" "--color=never"
          ,(if mega-search-literal "--fixed-strings" "--perl-regexp")
          ,@(when ignore-case '("--ignore-case"))
-         ,@(when (or mega-search-untracked mega-search-ignored) '("--untracked"))
-         ,@(when mega-search-ignored '("--no-exclude-standard"))
+         ;; Submodules, or what is not tracked: git refuses to do both.
+         ,@(cond (mega-search-submodules '("--recurse-submodules"))
+                 (mega-search-ignored '("--untracked" "--no-exclude-standard"))
+                 (mega-search-untracked '("--untracked")))
          ,@(when mega-search-word '("--word-regexp"))
          "-e" ,pattern
          "--" ,@paths))
@@ -204,14 +226,18 @@ than `mega-search-min-input' finds nothing, without running anything."
 
 (defun mega-search-describe ()
   "One line saying how the search currently works."
-  (format "%s  case:%s%s%s%s%s%s"
-          (or mega-search--backend "no search program")
-          mega-search-case
-          (if mega-search-untracked " +untracked" "")
-          (if mega-search-ignored " +ignored" "")
-          (if mega-search-hidden " +hidden" "")
-          (if mega-search-literal " literal" "")
-          (if mega-search-word " words" "")))
+  (let ((submodules (and mega-search-submodules (eq mega-search--backend 'git))))
+    (format "%s  case:%s%s%s%s%s%s%s"
+            (or mega-search--backend "no search program")
+            mega-search-case
+            ;; With submodules git searches tracked files only: say so
+            ;; by not claiming the other two.
+            (if (and mega-search-untracked (not submodules)) " +untracked" "")
+            (if (and mega-search-ignored (not submodules)) " +ignored" "")
+            (if submodules " +submodules" "")
+            (if mega-search-hidden " +hidden" "")
+            (if mega-search-literal " literal" "")
+            (if mega-search-word " words" ""))))
 
 (defun mega-search--changed ()
   "Search again with the new settings, and say what they are."
@@ -230,6 +256,8 @@ than `mega-search-min-input' finds nothing, without running anything."
                             "Include or leave out files git does not track.")
 (mega-search--define-toggle mega-search-toggle-ignored mega-search-ignored
                             "Include or leave out ignored files.")
+(mega-search--define-toggle mega-search-toggle-submodules mega-search-submodules
+                            "Search the submodules as well, or leave them out.")
 (mega-search--define-toggle mega-search-toggle-hidden mega-search-hidden
                             "Include or leave out hidden files.")
 (mega-search--define-toggle mega-search-toggle-literal mega-search-literal
@@ -245,11 +273,19 @@ than `mega-search-min-input' finds nothing, without running anything."
   (mega-search--changed))
 
 (defun mega-search-cycle-backend ()
-  "Search with the next usable program."
+  "Search with the next usable program, and stay with it for the session."
   (interactive)
-  (let* ((usable (mega-search-backends mega-search--directory))
-         (rest (cdr (memq mega-search--backend usable))))
-    (setq mega-search--backend (or (car rest) (car usable))))
+  ;; Round a fixed circle, not the order of preference: that order changes
+  ;; with every step taken here, and would send the third step back.
+  (let* ((usable (seq-filter (lambda (backend)
+                               (mega-search--usable-p backend mega-search--directory))
+                             '(git rg grep)))
+         (rest (cdr (memq mega-search--backend usable)))
+         (next (or (car rest) (car usable))))
+    (setq mega-search--backend next)
+    ;; Like the other settings of the prompt: the next search starts as
+    ;; this one was left.
+    (when next (setq mega-search-backend next)))
   (mega-search--changed))
 
 (defun mega-search-show-settings ()
@@ -268,6 +304,7 @@ than `mega-search-min-input' finds nothing, without running anything."
     (define-key map "c" #'mega-search-cycle-case)
     (define-key map "u" #'mega-search-toggle-untracked)
     (define-key map "i" #'mega-search-toggle-ignored)
+    (define-key map "s" #'mega-search-toggle-submodules)
     (define-key map "h" #'mega-search-toggle-hidden)
     (define-key map "l" #'mega-search-toggle-literal)
     (define-key map "w" #'mega-search-toggle-word)
@@ -334,8 +371,9 @@ See the Commentary of mega-search.el for the keys of the prompt."
     (unless mega-search--backend
       (user-error "No search program found: install ripgrep, or use this in a git repository"))
     (let ((choice (mega-pick-read
-                   (format "Search %s: "
-                           (file-name-nondirectory (directory-file-name directory)))
+                   (format "Search %s with %s: "
+                           (file-name-nondirectory (directory-file-name directory))
+                           (mega-search-backend-name mega-search--backend))
                    #'mega-search-run
                    :category 'mega-search
                    :initial initial

@@ -13,7 +13,8 @@
   `(let ((mega-search-case 'smart) (mega-search-untracked t)
          (mega-search-ignored nil) (mega-search-hidden t)
          (mega-search-literal nil) (mega-search-word nil)
-         (mega-search-backend 'auto) (mega-search-min-input 2)
+         (mega-search-submodules nil)
+         (mega-search-backend 'git) (mega-search-min-input 2)
          (mega-search-max-results 500))
      ,@body))
 
@@ -268,23 +269,119 @@ each containing the word needle in a different case."
 
 ;;;; Choosing the program
 
-(ert-deftest mega-search-picks-the-best-program-available ()
+(ert-deftest mega-search-git-grep-first-and-the-next-where-it-cannot-be-used ()
   (mega-test-with-directory dir
-    (let ((mega-search-backend 'auto))
+    (let ((mega-search-backend (default-value 'mega-search-backend))
+          (checkout (expand-file-name "checkout/" dir))
+          (plain (expand-file-name "plain/" dir)))
+      (should (eq mega-search-backend 'git))
+      (mega-test-write (expand-file-name ".git/HEAD" checkout) "ref: refs/heads/main" "")
+      (make-directory plain)
+      (cl-letf (((symbol-function 'mega-exec-find)
+                 (lambda (program &rest _) (member program '("git" "rg" "grep")))))
+        ;; In a checkout: git grep, though ripgrep is installed.
+        (should (eq (mega-search-backend-for checkout) 'git))
+        (should (equal (mega-search-backends checkout) '(git rg grep)))
+        ;; Outside one it cannot be used, and the next is.
+        (should (eq (mega-search-backend-for plain) 'rg))
+        (should (equal (mega-search-backends plain) '(rg grep)))
+        ;; The one you prefer comes first, and the rest stay behind it.
+        (let ((mega-search-backend 'rg))
+          (should (equal (mega-search-backends checkout) '(rg git grep))))
+        (let ((mega-search-backend 'grep))
+          (should (equal (mega-search-backends checkout) '(grep git rg)))
+          (should (eq (mega-search-backend-for plain) 'grep)))
+        ;; The old name for "whatever is best" means the default.
+        (let ((mega-search-backend 'auto))
+          (should (eq (mega-search-backend-for checkout) 'git))))
       (cl-letf (((symbol-function 'mega-exec-find)
                  (lambda (program &rest _) (member program '("grep")))))
-        (should (eq (mega-search-backend-for dir) 'grep)))
-      (cl-letf (((symbol-function 'mega-exec-find)
-                 (lambda (program &rest _) (member program '("rg" "grep")))))
-        (should (eq (mega-search-backend-for dir) 'rg))
-        ;; An explicit choice wins when it is usable...
-        (let ((mega-search-backend 'grep))
-          (should (eq (mega-search-backend-for dir) 'grep)))
-        ;; ...and is dropped when it is not: no .git here.
-        (let ((mega-search-backend 'git))
-          (should (eq (mega-search-backend-for dir) 'rg))))
+        (should (eq (mega-search-backend-for checkout) 'grep)))
       (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) nil)))
-        (should-not (mega-search-backend-for dir))))))
+        (should-not (mega-search-backend-for checkout))))))
+
+(ert-deftest mega-search-switching-the-program-lasts-for-the-session ()
+  "C-o b is the easy way to ripgrep and back; the next search starts there."
+  (mega-test-with-directory dir
+    (mega-test-write (expand-file-name ".git/HEAD" dir) "ref: refs/heads/main" "")
+    (let ((mega-search-backend 'git)
+          (mega-search--directory dir)
+          (mega-search--backend 'git))
+      (cl-letf (((symbol-function 'mega-exec-find)
+                 (lambda (program &rest _) (member program '("git" "rg" "grep"))))
+                ((symbol-function 'mega-search--changed) #'ignore))
+        (mega-search-cycle-backend)
+        (should (eq mega-search--backend 'rg))
+        ;; A search started afterwards, anywhere, begins with ripgrep.
+        (should (eq mega-search-backend 'rg))
+        (should (eq (mega-search-backend-for dir) 'rg))
+        ;; Round the circle and home again: every program can be reached.
+        (mega-search-cycle-backend)
+        (should (eq mega-search-backend 'grep))
+        (mega-search-cycle-backend)
+        (should (eq mega-search-backend 'git))
+        (should (eq mega-search--backend 'git))))))
+
+(ert-deftest mega-search-the-prompt-says-which-program-searches ()
+  (should (equal (mapcar #'mega-search-backend-name '(git rg grep nil))
+                 '("git grep" "ripgrep" "grep" "no search program")))
+  (mega-search-test--defaults
+    (mega-test-with-directory dir
+      (mega-test-write (expand-file-name "a.txt" dir) "the needle" "")
+      (let ((default-directory dir)
+            (mega-search-backend 'grep)
+            (inhibit-message t)
+            (asked nil))
+        (cl-letf (((symbol-function 'mega-pick-read)
+                   (lambda (prompt &rest _) (setq asked prompt) "")))
+          (mega-search-project))
+        (should (string-match-p " with grep: \\'" asked))))))
+
+(ert-deftest mega-search-submodules-or-untracked-files-never-both ()
+  "As the user's own aliases have it: gs searches submodules, g does not.
+And git refuses --recurse-submodules together with --untracked."
+  (mega-search-test--defaults
+    (let ((mega-search-submodules t))
+      (let ((command (mega-search-command 'git "needle" nil)))
+        (should (member "--recurse-submodules" command))
+        (should-not (member "--untracked" command))
+        (should-not (member "--no-exclude-standard" command)))
+      (let ((mega-search-ignored t))
+        (should-not (member "--untracked" (mega-search-command 'git "needle" nil))))
+      ;; The other programs walk the directories; a submodule is one.
+      (should-not (seq-some (lambda (argument) (string-search "submodule" argument))
+                            (append (mega-search-command 'rg "needle" nil)
+                                    (mega-search-command 'grep "needle" nil))))
+      (let ((mega-search--backend 'git))
+        (should (equal (mega-search-describe) "git  case:smart +submodules +hidden")))
+      (let ((mega-search--backend 'rg))
+        (should (equal (mega-search-describe) "rg  case:smart +untracked +hidden"))))))
+
+(ert-deftest mega-search-git-really-searches-the-submodules-when-asked ()
+  (skip-unless (executable-find "git"))
+  (mega-search-test--defaults
+    (mega-test-with-directory dir
+      (let ((outer (expand-file-name "outer/" dir))
+            (inner (expand-file-name "inner/" dir)))
+        (dolist (repository (list outer inner))
+          (make-directory repository)
+          (mega-search-test--git repository "init" "--quiet"))
+        (mega-test-write (expand-file-name "s.txt" inner) "needle in the submodule" "")
+        (mega-search-test--git inner "add" "s.txt")
+        (mega-search-test--git inner "-c" "user.email=t@example.invalid" "-c" "user.name=t"
+                               "commit" "--quiet" "-m" "inner")
+        (mega-test-write (expand-file-name "a.txt" outer) "needle tracked" "")
+        (mega-search-test--git outer "add" "a.txt")
+        (mega-search-test--git outer "-c" "protocol.file.allow=always"
+                               "submodule" "--quiet" "add" inner "sub")
+        (mega-test-write (expand-file-name "b.txt" outer) "needle untracked" "")
+        (let ((files (lambda ()
+                       (sort (mapcar (lambda (hit) (car (mega-search-parse hit)))
+                                     (mega-search-run "needle" outer 'git))
+                             #'string<))))
+          (should (equal (funcall files) '("a.txt" "b.txt")))
+          (let ((mega-search-submodules t))
+            (should (equal (funcall files) '("a.txt" "sub/s.txt")))))))))
 
 ;;;; The prompt's settings keys
 
@@ -301,7 +398,7 @@ each containing the word needle in a different case."
       (mega-search-toggle-word) (should mega-search-word))))
 
 (ert-deftest mega-search-every-setting-key-is-bound-after-C-o ()
-  (dolist (key '("c" "u" "i" "h" "l" "w" "b" "e" "?"))
+  (dolist (key '("c" "u" "i" "s" "h" "l" "w" "b" "e" "?"))
     (should (commandp (lookup-key mega-search-map (kbd (concat "C-o " key)))))))
 
 (ert-deftest mega-search-the-description-names-what-is-on ()
