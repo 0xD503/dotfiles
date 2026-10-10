@@ -32,9 +32,13 @@ CHANGES=0
 # machine keeps in them, and collecting would push one machine's overrides to
 # all the others. Only the `local` prefix reaches them, and only on request.
 EXCLUDES="update.sh tests README.md LICENSE .gitignore"
-HAND_COPY_FILES=".bashrc.local .zshrc.local .mega2.d/local.el \
-.gitconfig.local .gitconfig.signing"
+HAND_COPY_FILES=".bashrc.local .zshrc.local .gitconfig.local .gitconfig.signing"
 EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
+
+# What `install` and `uninstall` know by name. Each is a clone of the
+# repository it is published in, and they are the only thing here that uses
+# the network.
+KNOWN="mega2 tmux chemacs2"
 
 # Oh my tmux!, the tmux config that the tracked .tmux.conf.local customizes.
 OMT_URL="https://github.com/gpakosz/.tmux.git"
@@ -44,22 +48,34 @@ OMT_DIR="$HOME/.tmux"
 CHEMACS_URL="https://github.com/plexus/chemacs2.git"
 CHEMACS_DIR="$HOME/.emacs.d"
 
-# What `install` and `uninstall` know by name.
-#
-# A tree is a program that is a directory of this repo, as NAME:DIRECTORY.
-# Installing one makes the directory in $HOME hold these files and no file
-# that an earlier version of it left behind; so, per tree, the list of what
-# was installed is kept in $STATE_DIR/NAME.files. A tree that was uninstalled
-# is marked by $STATE_DIR/NAME.removed, and `user` then leaves it alone.
-#
-# A clone is fetched from where it is published, and is the only thing here
-# that uses the network.
-TREES="mega2:.mega2.d"
-CLONES="tmux chemacs2"
-case ${XDG_STATE_HOME-} in
-    /*) STATE_DIR="$XDG_STATE_HOME/dotfiles" ;;
-    *)  STATE_DIR="$HOME/.local/state/dotfiles" ;;
+# MEGA 2.0, the Emacs configuration that ~/.emacs-profiles.el names as the
+# default profile. A clone of it is told from a clone of something else by
+# the file MEGA2_FILE in it, which holds the text MEGA2_MARK.
+MEGA2_URL="https://github.com/0xD503/mega2.git"
+MEGA2_DIR="$HOME/.mega2.d"
+MEGA2_FILE=lisp/mega-lib.el
+MEGA2_MARK="(provide 'mega-lib)"
+# Where MEGA keeps what it builds, and what it remembers.
+case ${XDG_CACHE_HOME-} in
+    /*) MEGA2_CACHE="$XDG_CACHE_HOME/mega2" ;;
+    *)  MEGA2_CACHE="$HOME/.cache/mega2" ;;
 esac
+case ${XDG_STATE_HOME-} in
+    /*) MEGA2_STATE="$XDG_STATE_HOME/mega2" ;;
+    *)  MEGA2_STATE="$HOME/.local/state/mega2" ;;
+esac
+
+# Until MEGA 2.0 had a repository of its own it was a directory of this one:
+# `install mega2` copied it file by file, and kept a list of what it had
+# copied in here. Nothing is written here any more; what is found is cleared
+# away by `install mega2` and `uninstall mega2`.
+case ${XDG_STATE_HOME-} in
+    /*) OLD_LISTS="$XDG_STATE_HOME/dotfiles" ;;
+    *)  OLD_LISTS="$HOME/.local/state/dotfiles" ;;
+esac
+
+# A clone that is being made, to clear away if the script is stopped.
+HALF_MADE=
 
 usage() {
     cat <<EOF
@@ -79,8 +95,8 @@ commands:
   local      prefix: run the next command on the per-machine files instead
   help       this text
 
-what install and uninstall know:
-  mega2      MEGA 2.0, in ~/.mega2.d: exactly the files of this repo
+what install and uninstall know, each fetched from where it is published:
+  mega2      MEGA 2.0, the Emacs configuration, cloned into ~/.mega2.d
   chemacs2   the Emacs profile switcher, cloned into ~/.emacs.d
   tmux       Oh my tmux!, cloned into ~/.tmux, with ~/.tmux.conf linked to it
 
@@ -90,20 +106,19 @@ options:
 
 examples:
   ./$PROG user -n            preview a deploy
-  ./$PROG install mega2      install MEGA 2.0, or update it, and nothing else
-  ./$PROG uninstall mega2    remove it; 'user' then leaves it alone
+  ./$PROG install mega2      install MEGA 2.0, or update it
+  ./$PROG uninstall mega2    remove it; your local.el stays
   ./$PROG diff               review drift before collecting
   ./$PROG repo               pull your live configs back into the repo
   ./$PROG local diff         compare this machine's .local files with the stubs
 
 Backups go to \$HOME/.dotfiles-backup/<timestamp>/ mirroring the original
-paths, so restoring is a plain copy back. That holds for what an update or
-an uninstall removes as well.
+paths, so restoring is a plain copy back. That holds for what an uninstall
+removes as well: it is moved there, not deleted.
 
-'user' deploys everything the repo tracks, mega2 included unless it was
-uninstalled. For mega2 it also removes the files an earlier version
-installed and this one no longer has, so an update leaves nothing stale
-behind; nothing else in \$HOME is ever removed by it.
+'user' deploys what this repo tracks, and removes nothing from \$HOME. What
+'install' knows is not in this repo: it is fetched, and only when it is
+asked for by name.
 
 The per-machine files ('$PROG local list') differ from host to host on
 purpose, so every command skips them unless it is prefixed with 'local'.
@@ -247,243 +262,11 @@ install_file() {
     CHANGES=$((CHANGES + 1))
 }
 
-# --- trees: programs that are a directory of this repo -----------------------
-
-# Print the directory of the tree named $1; fail if there is no such tree.
-tree_dir() {
-    for td_entry in $TREES; do
-        case $td_entry in
-            "$1":*) printf '%s\n' "${td_entry#*:}"; return 0 ;;
-        esac
-    done
-    return 1
-}
-
-# Print the name of the tree that the repo-relative path $1 is part of; fail
-# if it is part of none.
-tree_of() {
-    for to_entry in $TREES; do
-        case $1 in
-            "${to_entry#*:}"/*) printf '%s\n' "${to_entry%%:*}"; return 0 ;;
-        esac
-    done
-    return 1
-}
-
-tree_removed() {
-    [ -e "$STATE_DIR/$1.removed" ]
-}
-
-# Print the managed files of the tree in directory $1, from $FILE_LIST.
-tree_files() {
-    while IFS= read -r tf_rel; do
-        case $tf_rel in
-            "$1"/*) printf '%s\n' "$tf_rel" ;;
-        esac
-    done < "$FILE_LIST"
-}
-
-# Remove $HOME/$1, a file some version of a tree installed, backing it up
-# first; then the directories that this leaves empty, up to but not including
-# the tree's own, $2.
-tree_remove_file() {
-    trf_rel=$1
-    # A list is a file in $HOME, and anybody may have written to it: nothing
-    # outside the tree is removed on its word, and nothing through "..".
-    case $trf_rel in
-        "$2"/*) ;;
-        *) return 0 ;;
-    esac
-    case /$trf_rel/ in
-        */../*) return 0 ;;
-    esac
-    if [ ! -e "$HOME/$trf_rel" ] && [ ! -L "$HOME/$trf_rel" ]; then
-        return 0
-    fi
-    note "remove  $trf_rel"
-    CHANGES=$((CHANGES + 1))
-    [ "$DRY_RUN" -eq 1 ] && return 0
-    backup_file "$HOME/$trf_rel" "$trf_rel" || return 1
-    if ! rm -f -- "$HOME/$trf_rel"; then
-        fail "cannot remove: $HOME/$trf_rel"
-        return 1
-    fi
-    trf_dir=$(dirname -- "$trf_rel")
-    while [ "$trf_dir" != "$2" ] && [ "$trf_dir" != . ] && [ "$trf_dir" != / ]; do
-        rmdir -- "$HOME/$trf_dir" 2>/dev/null || break
-        trf_dir=$(dirname -- "$trf_dir")
-    done
-    return 0
-}
-
-# Finish installing the tree named $1, whose files $FILE_LIST names: remove
-# from $HOME what the last version installed and this one no longer has, and
-# write down what this one installed.
-tree_settle() {
-    ts_name=$1
-    ts_dir=$(tree_dir "$ts_name") || return 1
-    ts_list="$STATE_DIR/$ts_name.files"
-    ts_new="$FILE_LIST.$ts_name"
-
-    tree_files "$ts_dir" > "$ts_new"
-    # A repo without this tree says nothing about what should be in $HOME.
-    # Taking a tree away is what `uninstall` is for, and only that.
-    if [ ! -s "$ts_new" ]; then
-        rm -f -- "$ts_new"
-        return 0
-    fi
-
-    if [ -f "$ts_list" ]; then
-        while IFS= read -r ts_old; do
-            grep -F -x -q -e "$ts_old" "$ts_new" && continue
-            tree_remove_file "$ts_old" "$ts_dir"
-        done < "$ts_list"
-    fi
-
-    if [ "$DRY_RUN" -eq 0 ]; then
-        if ! mkdir -p -- "$STATE_DIR" ||
-            ! cp -- "$ts_new" "$ts_list.new" ||
-            ! mv -f -- "$ts_list.new" "$ts_list"; then
-            fail "cannot write: $ts_list"
-        fi
-    fi
-    rm -f -- "$ts_new"
-}
-
-# Point out the files in the tree directory $1 of $HOME that are not this
-# repo's: yours, or left by a version installed before lists were kept.
-tree_strangers() {
-    [ -d "$HOME/$1" ] || return 0
-    (cd -- "$HOME" && find "$1" \( -type f -o -type l \) -print) 2>/dev/null |
-        sort > "$FILE_LIST.found"
-    while IFS= read -r tsr_rel; do
-        grep -F -x -q -e "$tsr_rel" "$FILE_LIST" && continue
-        tsr_note="not from this repo"
-        for tsr_own in $HAND_COPY_FILES; do
-            [ "$tsr_rel" = "$tsr_own" ] && tsr_note="yours"
-        done
-        note "kept    $tsr_rel  ($tsr_note)"
-    done < "$FILE_LIST.found"
-    rm -f -- "$FILE_LIST.found"
-}
-
-# `install NAME` for a tree.
-cmd_install_tree() {
-    cit_name=$1
-    cit_dir=$(tree_dir "$cit_name") || return 1
-    msg "Installing $cit_name into $HOME/$cit_dir"
-
-    tree_files "$cit_dir" > "$FILE_LIST.wanted"
-    if [ ! -s "$FILE_LIST.wanted" ]; then
-        rm -f -- "$FILE_LIST.wanted"
-        fail "this repo has no $cit_dir to install"
-        return 1
-    fi
-    cit_before=$CHANGES
-    while IFS= read -r cit_rel; do
-        install_file "$cit_rel"
-    done < "$FILE_LIST.wanted"
-    rm -f -- "$FILE_LIST.wanted"
-
-    # Asked for by name: it is wanted again, whatever was said before.
-    if [ "$DRY_RUN" -eq 0 ] && tree_removed "$cit_name"; then
-        rm -f -- "$STATE_DIR/$cit_name.removed"
-    fi
-    tree_settle "$cit_name"
-    tree_strangers "$cit_dir"
-    if [ "$CHANGES" -gt "$cit_before" ]; then
-        note "an Emacs that is running goes on with what it loaded: restart it"
-    fi
-}
-
-# `uninstall NAME` for a tree: what was installed goes, what is yours stays.
-cmd_uninstall_tree() {
-    cut_name=$1
-    cut_dir=$(tree_dir "$cut_name") || return 1
-    cut_list="$STATE_DIR/$cut_name.files"
-    msg "Removing $cut_name from $HOME/$cut_dir"
-
-    # What was installed, by the list kept of it; and what this repo would
-    # install, which covers a copy that was made before lists were kept.
-    {
-        [ -f "$cut_list" ] && cat -- "$cut_list"
-        tree_files "$cut_dir"
-    } | sort -u > "$FILE_LIST.going"
-    while IFS= read -r cut_rel; do
-        tree_remove_file "$cut_rel" "$cut_dir"
-    done < "$FILE_LIST.going"
-
-    # What MEGA 2.0 built for itself, and can build again: the compiled copy
-    # of its own Lisp. Not your history, your undo or its backups of your
-    # files, which are yours to delete.
-    if [ "$cut_name" = mega2 ]; then
-        case ${XDG_CACHE_HOME-} in
-            /*) cut_cache="$XDG_CACHE_HOME/mega2" ;;
-            *)  cut_cache="$HOME/.cache/mega2" ;;
-        esac
-        for cut_built in compiled eln; do
-            [ -d "$cut_cache/$cut_built" ] || continue
-            note "remove  $cut_cache/$cut_built  (built by MEGA, which builds it again)"
-            CHANGES=$((CHANGES + 1))
-            if [ "$DRY_RUN" -eq 0 ] && ! rm -rf -- "$cut_cache/$cut_built"; then
-                fail "cannot remove: $cut_cache/$cut_built"
-            fi
-        done
-    fi
-
-    # What is left in the directory is not ours: say so, and leave it.
-    if [ -d "$HOME/$cut_dir" ]; then
-        (cd -- "$HOME" && find "$cut_dir" \( -type f -o -type l \) -print) 2>/dev/null |
-            sort > "$FILE_LIST.left"
-        while IFS= read -r cut_rel; do
-            # In a dry run, what would have gone is still there.
-            grep -F -x -q -e "$cut_rel" "$FILE_LIST.going" && continue
-            note "kept    $cut_rel  (not installed from here)"
-        done < "$FILE_LIST.left"
-        rm -f -- "$FILE_LIST.left"
-    fi
-    rm -f -- "$FILE_LIST.going"
-
-    if [ "$DRY_RUN" -eq 0 ]; then
-        rm -f -- "$cut_list"
-        rmdir -- "$HOME/$cut_dir" 2>/dev/null
-        # So that `user` does not put it straight back.
-        if ! mkdir -p -- "$STATE_DIR" || ! : > "$STATE_DIR/$cut_name.removed"; then
-            fail "cannot write: $STATE_DIR/$cut_name.removed"
-        fi
-    fi
-    if [ "$cut_name" = mega2 ]; then
-        note "kept    what MEGA remembers, and its backups of your files:"
-        note "        ${XDG_STATE_HOME:-$HOME/.local/state}/mega2  ${XDG_CACHE_HOME:-$HOME/.cache}/mega2"
-    fi
-    # chemacs2 would go on trying to start what is no longer there.
-    if grep -F -q -e "/$cut_dir\"" "$HOME/.emacs-profiles.el" 2>/dev/null; then
-        note "~/.emacs-profiles.el still names ~/$cut_dir as a profile"
-    fi
-}
-
 cmd_user() {
     msg "Installing into $HOME"
-    cu_skipped=
-    while IFS= read -r cu_rel; do
-        # A tree that was uninstalled stays away until it is installed again.
-        if cu_tree=$(tree_of "$cu_rel") && tree_removed "$cu_tree"; then
-            case " $cu_skipped " in
-                *" $cu_tree "*) ;;
-                *) cu_skipped="$cu_skipped $cu_tree" ;;
-            esac
-            continue
-        fi
-        install_file "$cu_rel"
+    while IFS= read -r rel; do
+        install_file "$rel"
     done < "$FILE_LIST"
-
-    for cu_entry in $TREES; do
-        cu_tree=${cu_entry%%:*}
-        tree_removed "$cu_tree" || tree_settle "$cu_tree"
-    done
-    for cu_tree in $cu_skipped; do
-        note "skip    $(tree_dir "$cu_tree")  (uninstalled; '$PROG install $cu_tree' brings it back)"
-    done
 }
 
 cmd_repo() {
@@ -555,7 +338,20 @@ cmd_diff() {
     fi
 }
 
-# --- clones: programs fetched from where they are published -------------------
+# --- install and uninstall: clones of what is published elsewhere ----------------
+
+# Print where in $BACKUP_DIR the directory named $1 can be moved to: under its
+# own name, or, should something of that name have been moved there within
+# the same second, under that name and a number.
+backup_place() {
+    bp_to="$BACKUP_DIR/$1"
+    bp_n=1
+    while [ -e "$bp_to" ] || [ -L "$bp_to" ]; do
+        bp_n=$((bp_n + 1))
+        bp_to="$BACKUP_DIR/$1.$bp_n"
+    done
+    printf '%s\n' "$bp_to"
+}
 
 # Clone $2 into $3, or bring the clone that is there up to date. $1 names the
 # thing for a person. A clone of it is told from a clone of something else by
@@ -633,7 +429,7 @@ clone_remove() {
     if [ "$NO_BACKUP" -eq 1 ]; then
         rm -rf -- "$cr_dir" || { fail "cannot remove: $cr_dir"; return 1; }
     else
-        cr_kept="$BACKUP_DIR/$(basename -- "$cr_dir")"
+        cr_kept=$(backup_place "$(basename -- "$cr_dir")")
         if ! mkdir -p -- "$BACKUP_DIR" || ! mv -- "$cr_dir" "$cr_kept"; then
             fail "cannot move $cr_dir to $cr_kept"
             return 1
@@ -731,19 +527,258 @@ cmd_uninstall_chemacs2() {
         *) return 1 ;;
     esac
     note "~/.emacs-profiles.el is this repo's file and stays; without chemacs2,"
-    note "start a profile yourself:  emacs --init-directory ~/.mega2.d"
+    note "start a profile yourself:  emacs --init-directory $MEGA2_DIR"
+}
+
+# --- MEGA 2.0 ------------------------------------------------------------------
+
+# Say what is at $MEGA2_DIR:
+#   nothing
+#   clone    a clone of MEGA 2.0
+#   copy     a directory that is no clone: MEGA as this script copied it when
+#            it was a directory of this repo, or what an uninstall left of
+#            it, or what an Emacs wrote there that chemacs2 started on the
+#            profile while MEGA was away
+#   other    anything else: a link, a file, a clone of something else
+mega2_found() {
+    if [ -L "$MEGA2_DIR" ]; then
+        printf 'other\n'
+    elif [ ! -e "$MEGA2_DIR" ]; then
+        printf 'nothing\n'
+    elif [ ! -d "$MEGA2_DIR" ]; then
+        printf 'other\n'
+    elif [ ! -e "$MEGA2_DIR/.git" ]; then
+        printf 'copy\n'
+    elif [ -d "$MEGA2_DIR/.git" ] &&
+        grep -q -e "$MEGA2_MARK" "$MEGA2_DIR/$MEGA2_FILE" 2>/dev/null; then
+        printf 'clone\n'
+    else
+        printf 'other\n'
+    fi
+}
+
+mega2_has_local() {
+    [ -e "$MEGA2_DIR/local.el" ] || [ -L "$MEGA2_DIR/local.el" ]
+}
+
+# Succeed if nothing is in $MEGA2_DIR, or nothing but local.el.
+mega2_bare() {
+    [ -z "$(ls -A -- "$MEGA2_DIR" 2>/dev/null | grep -v -x -F -e local.el)" ]
+}
+
+# Move $MEGA2_DIR out of the way: to where backups go, with whatever was put
+# into it, or to nowhere if backups were declined. Its local.el is yours and
+# does not go along: it waits in $MEGA2_KEPT, beside the directory, for
+# mega2_put_back.
+mega2_put_aside() {
+    MEGA2_KEPT=
+    if mega2_has_local; then
+        MEGA2_KEPT="$MEGA2_DIR.local.el.$$"
+        if ! mv -- "$MEGA2_DIR/local.el" "$MEGA2_KEPT"; then
+            fail "cannot move: $MEGA2_DIR/local.el"
+            MEGA2_KEPT=
+            return 1
+        fi
+    fi
+    # Nothing else in it: there is nothing to keep.
+    rmdir -- "$MEGA2_DIR" 2>/dev/null && return 0
+    if [ "$NO_BACKUP" -eq 1 ]; then
+        if ! rm -rf -- "$MEGA2_DIR"; then
+            fail "cannot remove: $MEGA2_DIR"
+            mega2_put_back
+            return 1
+        fi
+    else
+        mpa_to=$(backup_place "$(basename -- "$MEGA2_DIR")")
+        if ! mkdir -p -- "$BACKUP_DIR" || ! mv -- "$MEGA2_DIR" "$mpa_to"; then
+            fail "cannot move $MEGA2_DIR to $mpa_to"
+            mega2_put_back
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Put the local.el that mega2_put_aside kept into $MEGA2_DIR.
+mega2_put_back() {
+    [ -n "$MEGA2_KEPT" ] || return 0
+    if ! mkdir -p -- "$MEGA2_DIR" ||
+        ! mv -- "$MEGA2_KEPT" "$MEGA2_DIR/local.el"; then
+        fail "cannot put your local.el back into $MEGA2_DIR; it is at $MEGA2_KEPT"
+        return 1
+    fi
+    MEGA2_KEPT=
+    return 0
+}
+
+# Clear away the list that was kept of a copy, and the mark of its uninstall.
+mega2_forget_lists() {
+    [ "$DRY_RUN" -eq 1 ] && return 0
+    rm -f -- "$OLD_LISTS/mega2.files" "$OLD_LISTS/mega2.removed"
+    rmdir -- "$OLD_LISTS" 2>/dev/null
+    return 0
+}
+
+# Put a clone where a copy is. The clone is made first, beside it, so that a
+# network that is down leaves the copy as it was.
+mega2_replace_copy() {
+    if ! command -v git >/dev/null 2>&1; then
+        fail "git is required"
+        return 1
+    fi
+
+    if ! mega2_bare; then
+        note "replace $MEGA2_DIR  (not a clone; one takes its place)"
+        CHANGES=$((CHANGES + 1))
+    fi
+    note "clone   $MEGA2_URL"
+    CHANGES=$((CHANGES + 1))
+    mega2_has_local && note "kept    $MEGA2_DIR/local.el  (yours)"
+    [ "$DRY_RUN" -eq 1 ] && return 0
+
+    HALF_MADE="$MEGA2_DIR.new.$$"
+    if ! git clone --quiet --single-branch -- "$MEGA2_URL" "$HALF_MADE"; then
+        rm -rf -- "$HALF_MADE"
+        HALF_MADE=
+        fail "cannot clone: $MEGA2_URL; $MEGA2_DIR is as it was"
+        return 1
+    fi
+    if ! mega2_put_aside; then
+        rm -rf -- "$HALF_MADE"
+        HALF_MADE=
+        return 1
+    fi
+    if ! mv -- "$HALF_MADE" "$MEGA2_DIR"; then
+        fail "cannot move $HALF_MADE to $MEGA2_DIR"
+        [ -n "$MEGA2_KEPT" ] && warn "your local.el is at $MEGA2_KEPT"
+        HALF_MADE=
+        return 1
+    fi
+    HALF_MADE=
+    mega2_put_back
+}
+
+# MEGA 2.0 is ~/.mega2.d itself: a clone, which Emacs is pointed at by
+# chemacs2 or by --init-directory. Running this again updates the clone. Its
+# git ignores local.el, which is yours, so an update never touches that.
+#
+# A ~/.mega2.d that is not a clone is replaced by one; see mega2_found for
+# what that may be. What was there is moved to where backups go, and its
+# local.el is carried over.
+cmd_install_mega2() {
+    msg "Installing MEGA 2.0 into $MEGA2_DIR"
+    cim_before=$CHANGES
+    cim_found=$(mega2_found)
+    # Nothing of MEGA is there yet: at most a local.el that waited for it.
+    cim_new=0
+    if [ "$cim_found" = nothing ] || { [ "$cim_found" = copy ] && mega2_bare; }; then
+        cim_new=1
+    fi
+
+    if [ -L "$MEGA2_DIR" ]; then
+        fail "$MEGA2_DIR is a link; what it points at is yours to update"
+        return 1
+    fi
+    if [ "$cim_found" = copy ]; then
+        mega2_replace_copy || return 1
+    else
+        # This refuses what is neither nothing nor a clone of MEGA.
+        clone_or_pull "MEGA 2.0" "$MEGA2_URL" "$MEGA2_DIR" \
+            "$MEGA2_FILE" "$MEGA2_MARK" || return 1
+    fi
+    mega2_forget_lists
+
+    [ "$CHANGES" -gt "$cim_before" ] || return 0
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    if [ "$cim_new" -eq 1 ]; then
+        if [ -f "$CHEMACS_DIR/chemacs.el" ]; then
+            [ -e "$HOME/.emacs-profiles.el" ] ||
+                note "no ~/.emacs-profiles.el yet: '$PROG user' installs this repo's copy"
+        else
+            note "start it with:  emacs --init-directory $MEGA2_DIR"
+            note "or have plain 'emacs' start it:  $PROG install chemacs2"
+        fi
+    else
+        note "an Emacs that is running goes on with what it loaded: restart it"
+    fi
+}
+
+# The directory goes, to where backups go, with whatever was put into it;
+# your local.el stays where it is. What MEGA built for itself goes too, and
+# is built again when needed. What it remembers stays: your history, your
+# undo, and its backups of your files are yours to delete.
+cmd_uninstall_mega2() {
+    msg "Removing MEGA 2.0 from $MEGA2_DIR"
+
+    if [ -L "$MEGA2_DIR" ]; then
+        fail "$MEGA2_DIR is a link; what it points at is yours to remove"
+        return 1
+    fi
+    case $(mega2_found) in
+        nothing)
+            note "nothing at $MEGA2_DIR"
+            ;;
+        other)
+            fail "$MEGA2_DIR is not a clone of MEGA 2.0; it is left alone"
+            return 1
+            ;;
+        *)
+            if mega2_bare; then
+                if mega2_has_local; then
+                    note "nothing at $MEGA2_DIR but your local.el"
+                else
+                    note "nothing at $MEGA2_DIR"
+                    [ "$DRY_RUN" -eq 1 ] || rmdir -- "$MEGA2_DIR" 2>/dev/null
+                fi
+            else
+                note "remove  $MEGA2_DIR"
+                CHANGES=$((CHANGES + 1))
+                mega2_has_local && note "kept    $MEGA2_DIR/local.el  (yours)"
+                if [ "$DRY_RUN" -eq 0 ]; then
+                    mega2_put_aside || return 1
+                    mega2_put_back || return 1
+                fi
+            fi
+            ;;
+    esac
+
+    for cum_built in compiled eln; do
+        [ -d "$MEGA2_CACHE/$cum_built" ] || continue
+        note "remove  $MEGA2_CACHE/$cum_built  (built by MEGA, which builds it again)"
+        CHANGES=$((CHANGES + 1))
+        if [ "$DRY_RUN" -eq 0 ] && ! rm -rf -- "$MEGA2_CACHE/$cum_built"; then
+            fail "cannot remove: $MEGA2_CACHE/$cum_built"
+        fi
+    done
+    mega2_forget_lists
+
+    if [ -d "$MEGA2_STATE" ] || [ -d "$MEGA2_CACHE" ]; then
+        note "kept    what MEGA remembers, and its backups of your files:"
+        note "        $MEGA2_STATE  $MEGA2_CACHE"
+    fi
+    # chemacs2 would go on starting Emacs there, without a configuration.
+    if grep -F -q -e "/$(basename -- "$MEGA2_DIR")\"" "$HOME/.emacs-profiles.el" 2>/dev/null; then
+        note "~/.emacs-profiles.el still names ~/$(basename -- "$MEGA2_DIR") as a profile"
+    fi
+}
+
+# MEGA 2.0 used to be deployed by `user`, as a directory of this repo. A copy
+# from then is brought up to date by nothing any more: say what does it.
+mega2_hint_copy() {
+    [ "$HAND_COPY" -eq 0 ] || return 0
+    [ "$(mega2_found)" = copy ] || return 0
+    [ -f "$MEGA2_DIR/$MEGA2_FILE" ] || return 0
+    msg "note: $MEGA2_DIR is a copy from when MEGA 2.0 was part of this repo;"
+    msg "      '$PROG install mega2' replaces it by a clone, which can be updated"
 }
 
 # Print the names `install` and `uninstall` take.
 names() {
-    for n_entry in $TREES; do
-        printf '%s ' "${n_entry%%:*}"
-    done
-    printf '%s\n' "$CLONES"
+    printf '%s\n' "$KNOWN"
 }
 
 known_name() {
-    for kn_name in $(names); do
+    for kn_name in $KNOWN; do
         [ "$kn_name" = "$1" ] && return 0
     done
     return 1
@@ -752,9 +787,9 @@ known_name() {
 cmd_install() {
     for ci_name in $NAMES; do
         case $ci_name in
+            mega2)    cmd_install_mega2 ;;
             tmux)     cmd_install_tmux ;;
             chemacs2) cmd_install_chemacs2 ;;
-            *)        cmd_install_tree "$ci_name" ;;
         esac
     done
 }
@@ -762,9 +797,9 @@ cmd_install() {
 cmd_uninstall() {
     for ci_name in $NAMES; do
         case $ci_name in
+            mega2)    cmd_uninstall_mega2 ;;
             tmux)     cmd_uninstall_tmux ;;
             chemacs2) cmd_uninstall_chemacs2 ;;
-            *)        cmd_uninstall_tree "$ci_name" ;;
         esac
     done
 }
@@ -844,9 +879,15 @@ fi
 # The file list goes through a temp file, not a pipe: a piped `while` loop runs
 # in a subshell, where the change and error counters would be lost.
 FILE_LIST="${TMPDIR:-/tmp}/.dotfiles-list.$$"
-trap 'rm -f -- "$FILE_LIST" "$FILE_LIST".*' EXIT
-trap 'rm -f -- "$FILE_LIST" "$FILE_LIST".*; exit 130' INT
-trap 'rm -f -- "$FILE_LIST" "$FILE_LIST".*; exit 143' TERM
+cleanup() {
+    rm -f -- "$FILE_LIST" "$FILE_LIST".*
+    if [ -n "$HALF_MADE" ]; then
+        rm -rf -- "$HALF_MADE"
+    fi
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 set -C  # refuse to clobber an existing file, in case /tmp is hostile
 if ! list_files > "$FILE_LIST"; then
@@ -871,8 +912,9 @@ case $COMMAND in
     uninstall) cmd_uninstall ;;
 esac
 
-if [ "$COMMAND" = user ] || [ "$COMMAND" = link ] || [ "$COMMAND" = install ]; then
+if [ "$COMMAND" = user ] || [ "$COMMAND" = link ]; then
     hint_untracked
+    mega2_hint_copy
 fi
 
 if [ "$COMMAND" != diff ]; then
