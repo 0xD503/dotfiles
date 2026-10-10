@@ -347,7 +347,20 @@ programs and using the disk, say how slow the machine is right now, and the
 figures are stretched by that; they are taken at the start and at the end,
 and again before any benchmark is called a failure, which is then run a
 second time. Memory is collected as in a running session. A run can be
-saved and compared with (`MEGA_BENCH_SAVE`, `MEGA_BENCH_COMPARE`). The
+saved and compared with (`MEGA_BENCH_SAVE`, `MEGA_BENCH_COMPARE`).
+
+The expected times are kept apart from the benchmarks, in
+`tests/mega2/mega-bench-history.eld`: for each, every time it was ever held
+to, with the date, the commit that changed what it takes, and the reason.
+A benchmark has no number of its own, so a time cannot be raised without a
+record, and the stage fails on a record that lacks its commit or its
+reason, or names a commit the repository does not have. The rule is in
+that file and is short: over its time, a benchmark is first explained (the
+stage prints the `git bisect` command, starting from the commit of the
+last record), then fixed; the time goes up only when the slowdown is the
+reasonable, direct and minimised price of a change that is wanted, and
+then whoever introduced it adds the record. The commit comes first and the
+record after it, in a commit of its own. The
 harness was itself tried both ways: a threefold slowdown put into a copy of
 the code fails it, and a machine kept busy by twice as many spinning
 processes as it has processors does not. A new feature with something a

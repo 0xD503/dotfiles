@@ -12,8 +12,11 @@
 #   boot      start MEGA in batch and check what startup did: no failed
 #             module, no program run, no connection, within the time budget
 #   bench     time what a person waits for (a keystroke, the completion
-#             menu, a search, a save...) against a budget each; every time
-#             is printed, so a slowdown shows before it fails
+#             menu, a search, a save...) against what each is expected to
+#             take; every time is printed, so a slowdown shows before it
+#             fails.  The expected times, and the commit and reason behind
+#             each, are in tests/mega2/mega-bench-history.eld, which also
+#             says what to do when one is exceeded.
 #   terminal  start it for real in a pseudo-terminal: directly, through
 #             chemacs2 if you have it, and with a too-old Emacs if one exists
 #
@@ -33,6 +36,7 @@
 #   EMACS_OLD          an Emacs older than MEGA supports, for the refusal
 #                      test          (default: /usr/bin/emacs, if it is older)
 #   MEGA_STARTUP_BUDGET_MS   startup budget for the boot stage  (default: 100)
+#   MEGA_BENCH_ONLY    a regexp: time only the benchmarks whose names match
 #   MEGA_BENCH_SCALE   multiply what the bench stage expects, for a
 #                      slower machine                            (default: 1)
 #   MEGA_BENCH_TOLERANCE  how many times the expected time fails  (default: 3)

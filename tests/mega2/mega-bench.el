@@ -8,10 +8,17 @@
 ;; listing and finding a file, a search, a save, the undo tree, a debugger
 ;; message, the first start of a language server.
 ;;
-;; Each benchmark states what it is expected to take, in milliseconds: what
-;; it took on the machine these figures were set on.  The run prints every
-;; time next to that figure, and how many times the one is of the other, so
-;; a slowdown shows as soon as it is there.  Over one and a half times the
+;; Each benchmark is expected to take a certain time, in milliseconds: what
+;; it took on the machine the figures were set on.  Those figures are not in
+;; this file.  They are in mega-bench-history.eld, each with the commit that
+;; made it what it is and the reason, and the top of that file says what is
+;; expected of whoever finds a benchmark over its time: find the cause; fix
+;; it; and only if the slowdown is the reasonable, direct and minimised
+;; price of a change that is wanted, record the new time, the commit and
+;; the reason.
+;;
+;; The run prints every time next to its figure, and how many times the one
+;; is of the other, so a slowdown shows as soon as it is there.  Over one and a half times the
 ;; expected, a line is marked SLOW: the run still passes, and somebody
 ;; should look.  Over three times, the run fails.  Three, because a tighter
 ;; limit fails on a machine that is merely busy, and a looser one lets a
@@ -47,6 +54,8 @@
 ;; every machine has from the first start, the slowest there is, and the
 ;; one in which a slowdown in MEGA's own code shows most.
 ;;
+;;   MEGA_BENCH_ONLY=regexp  run the benchmarks whose names match, as when
+;;                           looking for the commit that made one slower
 ;;   MEGA_BENCH_SCALE=2      multiply every expectation once more, by hand
 ;;   MEGA_BENCH_TOLERANCE=4  fail at four times the expected, not three
 ;;   MEGA_BENCH_SAVE=file    write the times of this run to FILE
@@ -66,35 +75,136 @@
 ;; (:skip TEXT) when what it needs is not on this machine.
 ;;
 ;; To add one: `mega-bench-define', a name that says what a person does,
-;; nil for what it is expected to take, and the function.  Run the stage;
-;; it reports what the benchmark would take on the reference machine.  Put
-;; that figure in.  A piece of work that takes under a few milliseconds is
-;; too small to time: make it do the thing a hundred times.  Order matters
-;; only for the first, which must run before anything has loaded the
-;; modules it times.
+;; and the function.  Run the stage: it says the benchmark has no record,
+;; and prints the one to put into mega-bench-history.eld once the benchmark
+;; is committed.  A piece of work that takes under a few milliseconds is too
+;; small to time: make it do the thing a hundred times.  Order matters only
+;; for the first, which must run before anything has loaded the modules it
+;; times.
 
 ;;; Code:
 
 (require 'mega-test-helper)
 
 (defvar mega-bench--list nil
-  "The benchmarks, newest first: (NAME EXPECTED FUNCTION . OPTIONS).")
+  "The benchmarks, newest first: (NAME FUNCTION . OPTIONS).")
 
-(defun mega-bench-define (name expected function &rest options)
-  "Define the benchmark NAME, which is expected to take EXPECTED milliseconds.
-EXPECTED is what it takes on the reference machine; nil means nobody
-has said yet, and the run only reports.  FUNCTION prepares the work and
-returns the function that does it; only the latter is timed.  OPTIONS
-is a plist:
+(defun mega-bench-define (name function &rest options)
+  "Define the benchmark NAME.
+What it is expected to take is not said here but in the history file:
+see `mega-bench-history-file'.  FUNCTION prepares the work and returns
+the function that does it; only the latter is timed.  OPTIONS is a
+plist:
 
   :rounds   how often that is done, by default 3; the best time counts
   :kind     `process' for work that starts programs or uses the disk,
-            which the speed of Lisp says little about
-  :limit    what it may take at most, in milliseconds on the reference
-            machine, where three times the expected is the wrong
-            measure: for something done once, whose time depends on
-            what the disk happens to have ready"
-  (push (append (list name expected function) options) mega-bench--list))
+            which the speed of Lisp says little about"
+  (push (append (list name function) options) mega-bench--list))
+
+;;;; What is expected, and how it came to be
+
+(defconst mega-bench-history-file
+  (expand-file-name "mega-bench-history.eld" mega-test-dir)
+  "The file that holds what each benchmark is expected to take.
+Its commentary gives the format, and the rule for changing a figure.")
+
+(defconst mega-bench-machine-entries
+  '("the reference machine: computing" "the reference machine: programs and disk")
+  "The two entries of the history that are not benchmarks.
+They are what `mega-bench--reference' and `mega-bench--process-reference'
+took on the machine the figures were set on.")
+
+(defvar mega-bench--history 'unread
+  "The history as read: an alist (NAME RECORD...), or `unread'.")
+
+(defun mega-bench-history ()
+  "The history: an alist (NAME RECORD...), each record a plist, oldest first."
+  (when (eq mega-bench--history 'unread)
+    (setq mega-bench--history
+          (condition-case nil
+              (with-temp-buffer
+                (insert-file-contents mega-bench-history-file)
+                (read (current-buffer)))
+            (error nil))))
+  mega-bench--history)
+
+(defun mega-bench-established (name)
+  "The record NAME is held to: the last in its entry of the history, or nil."
+  (car (last (cdr (assoc name (mega-bench-history))))))
+
+(defun mega-bench--commit-known-p (commit)
+  "Whether the checked-out history contains COMMIT: `yes', `no', or nil.
+Nil means it could not be asked: no git, or no repository here."
+  (let ((default-directory mega-test-dir))
+    (condition-case nil
+        (cond ((not (eql 0 (call-process "git" nil nil nil "rev-parse" "--git-dir")))
+               nil)
+              ((eql 0 (call-process "git" nil nil nil "merge-base" "--is-ancestor"
+                                    (concat commit "^{commit}") "HEAD"))
+               'yes)
+              (t 'no))
+      (error nil))))
+
+(defun mega-bench-history-problems (&optional names)
+  "What is wrong with the history, as a list of strings; nil if nothing is.
+NAMES are the benchmarks there are, by default those defined.  A figure
+is only as good as its record: every benchmark has an entry, every entry
+a benchmark, every record says when, in which commit and why, the dates
+do not go backwards, and every commit is one the repository has."
+  (let ((names (or names (mapcar #'car mega-bench--list)))
+        (history (mega-bench-history))
+        (problems nil)
+        (asked (make-hash-table :test #'equal)))
+    (cl-flet ((problem (format-string &rest arguments)
+                (push (apply #'format format-string arguments) problems)))
+      (cond
+       ((not (and history (listp history)))
+        (problem "%s cannot be read" (file-name-nondirectory mega-bench-history-file)))
+       (t
+        (dolist (name (append mega-bench-machine-entries names))
+          (unless (assoc name history)
+            (problem "`%s' has no record of what it is expected to take" name)))
+        (dolist (entry history)
+          (let ((name (car-safe entry))
+                (records (cdr-safe entry))
+                (before nil))
+            (cond
+             ((not (and (stringp name) (consp records)))
+              (problem "an entry is not a name and its records: %S" entry))
+             (t
+              (unless (or (member name names) (member name mega-bench-machine-entries))
+                (problem "`%s' is in the history, and no benchmark is called that: a benchmark that is renamed takes its history along" name))
+              (when (cdr (seq-filter (lambda (other) (equal (car-safe other) name)) history))
+                (problem "`%s' has two entries" name))
+              (dolist (record records)
+                (let ((ms (plist-get record :ms))
+                      (limit (plist-get record :limit))
+                      (date (plist-get record :date))
+                      (commit (plist-get record :commit))
+                      (reason (plist-get record :reason)))
+                  (unless (and (numberp ms) (> ms 0))
+                    (problem "`%s': a record without a time: %S" name record))
+                  (unless (or (null limit) (and (numberp limit) (numberp ms) (>= limit ms)))
+                    (problem "`%s': a limit that is no number, or under the time: %S" name record))
+                  (if (not (and (stringp date)
+                                (string-match-p "\\`[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]\\'" date)))
+                      (problem "`%s': a record without its date, as YYYY-MM-DD: %S" name record)
+                    (when (and before (string< date before))
+                      (problem "`%s': the record of %s comes after that of %s" name date before))
+                    (setq before date))
+                  (unless (and (stringp reason) (not (string-blank-p reason)))
+                    (problem "`%s': the record of %s gives no reason" name date))
+                  (if (not (and (stringp commit)
+                                (string-match-p "\\`[0-9a-f]\\{7,40\\}\\'" commit)))
+                      (problem "`%s': the record of %s names no commit" name date)
+                    (when (eq 'no (or (gethash commit asked)
+                                      (puthash commit
+                                               (or (mega-bench--commit-known-p commit)
+                                                   'unknown)
+                                               asked)))
+                      (problem "`%s': the record of %s names commit %s, which is not in the history of what is checked out"
+                               name date commit))))))))))))
+    (nreverse problems)))
 
 (defun mega-bench--time (function)
   "Call FUNCTION and return how long it took: (MILLISECONDS . NOTE).
@@ -118,9 +228,9 @@ returns (:skip TEXT), so does this."
   (let ((best nil) (skipped nil))
     ;; What the benchmark before this one left behind is not this one's.
     (garbage-collect)
-    (dotimes (_ (or (plist-get (nthcdr 3 benchmark) :rounds) 3))
+    (dotimes (_ (or (plist-get (nthcdr 2 benchmark) :rounds) 3))
       (unless skipped
-        (let ((time (mega-bench--time (funcall (nth 2 benchmark)))))
+        (let ((time (mega-bench--time (funcall (nth 1 benchmark)))))
           (cond ((eq (car time) :skip) (setq skipped time))
                 ((or (null best) (< (car time) (car best)))
                  (setq best time))))))
@@ -128,11 +238,15 @@ returns (:skip TEXT), so does this."
 
 ;;;; How fast the machine is right now
 
-(defconst mega-bench-reference-ms 84.0
-  "What `mega-bench--reference' takes on the machine the figures were set on.")
+(defun mega-bench-reference-ms ()
+  "What `mega-bench--reference' takes on the machine the figures were set on."
+  (or (plist-get (mega-bench-established (nth 0 mega-bench-machine-entries)) :ms)
+      (error "The history does not say what the reference machine does")))
 
-(defconst mega-bench-process-reference-ms 20.5
-  "What `mega-bench--process-reference' takes on that machine.")
+(defun mega-bench-process-reference-ms ()
+  "What `mega-bench--process-reference' takes on that machine."
+  (or (plist-get (mega-bench-established (nth 1 mega-bench-machine-entries)) :ms)
+      (error "The history does not say what the reference machine does")))
 
 (defun mega-bench--reference ()
   "A fixed piece of work of the kind MEGA does: strings, lists, a regexp."
@@ -173,23 +287,23 @@ A plist: :lisp and :process are factors, at least 1; :lisp-ms and
 :process-ms are the times they come from."
   (let ((lisp (mega-bench--best-of-three #'mega-bench--reference))
         (process (mega-bench--best-of-three #'mega-bench--process-reference)))
-    (list :lisp (max 1.0 (/ lisp mega-bench-reference-ms))
-          :process (max 1.0 (/ process mega-bench-process-reference-ms))
+    (list :lisp (max 1.0 (/ lisp (mega-bench-reference-ms)))
+          :process (max 1.0 (/ process (mega-bench-process-reference-ms)))
           :lisp-ms lisp :process-ms process)))
 
 (defun mega-bench--factor (benchmark machine)
   "By how much MACHINE stretches what BENCHMARK is expected to take."
-  (if (eq (plist-get (nthcdr 3 benchmark) :kind) 'process)
+  (if (eq (plist-get (nthcdr 2 benchmark) :kind) 'process)
       (max (plist-get machine :lisp) (plist-get machine :process))
     (plist-get machine :lisp)))
 
-(defun mega-bench--limit (benchmark tolerance)
-  "The time over which BENCHMARK has failed, on the reference machine.
-Its own :limit if it states one; else TOLERANCE times what it is
-expected to take, and never less than two milliseconds over that: below
-that the clock is the noise."
-  (let ((expected (nth 1 benchmark)))
-    (or (plist-get (nthcdr 3 benchmark) :limit)
+(defun mega-bench--limit (record tolerance)
+  "The time over which a benchmark held to RECORD has failed.
+On the reference machine: its own :limit if the record states one; else
+TOLERANCE times what it is expected to take, and never less than two
+milliseconds over that, below which the clock is the noise."
+  (let ((expected (plist-get record :ms)))
+    (or (plist-get record :limit)
         (max (* tolerance expected) (+ expected 2.0)))))
 
 ;;;; What is timed
@@ -218,7 +332,7 @@ that the clock is the noise."
 ;; First, before anything below loads a module: what the first press of a
 ;; key costs when its module has waited for that press.
 (mega-bench-define
- "first use of a feature: load its module (slowest)" 2.3
+ "first use of a feature: load its module (slowest)"
  (lambda ()
    (let ((modules (seq-remove #'featurep (mapcar #'car mega-lazy-modules))))
      (lambda ()
@@ -231,7 +345,7 @@ that the clock is the noise."
                      which module))))
          ;; The time that counts is the slowest module, not their sum.
          (list :ms (* 1000.0 slowest) :note (format "%s" which))))))
- :rounds 1 :kind 'process :limit 40)
+ :rounds 1 :kind 'process)
 
 (defun mega-bench--type (buffer after-each)
   "Type 1000 characters at the end of BUFFER, then discard it.
@@ -255,7 +369,7 @@ is called after each character as well."
     (kill-buffer buffer)))
 
 (mega-bench-define
- "type 1000 characters in code" 26
+ "type 1000 characters in code"
  (lambda ()
    (require 'mega-complete)
    (require 'mega-edit)
@@ -266,7 +380,7 @@ is called after each character as well."
      (lambda () (mega-bench--type buffer nil)))))
 
 (mega-bench-define
- "type 1000 characters in Rust, each one highlighted" 97
+ "type 1000 characters in Rust, each one highlighted"
  (lambda ()
    (require 'mega-complete)
    (require 'mega-edit)
@@ -287,7 +401,7 @@ is called after each character as well."
                                                      (line-end-position))))))))
 
 (mega-bench-define
- "modeline: what MEGA works out for it, 5000 times" 12.7
+ "modeline: what MEGA works out for it, 5000 times"
  (lambda ()
    (require 'mega-ui)
    (require 'mega-trust)
@@ -315,7 +429,7 @@ is called after each character as well."
          (kill-buffer buffer))))))
 
 (mega-bench-define
- "completion menu: choose from 5000 candidates" 3.6
+ "completion menu: choose from 5000 candidates"
  (lambda ()
    (require 'mega-complete)
    (let ((table (mapcar (lambda (index) (format "mega_candidate_%04d" index))
@@ -327,7 +441,7 @@ is called after each character as well."
            (unless (cdr found) (error "No candidates"))))))))
 
 (mega-bench-define
- "completion menu: draw it 300 times" 17
+ "completion menu: draw it 300 times"
  (lambda ()
    (require 'mega-complete)
    (require 'mega-popup)
@@ -362,7 +476,7 @@ is called after each character as well."
         (setq mega-bench--tree directory))))
 
 (mega-bench-define
- "project files: list 3000, pass over 3000 built ones" 7.6
+ "project files: list 3000, pass over 3000 built ones"
  (lambda ()
    (require 'mega-project)
    (let ((directory (mega-bench--tree)))
@@ -372,7 +486,7 @@ is called after each character as well."
  :kind 'process)
 
 (mega-bench-define
- "narrow 100,000 file names at the prompt (Emacs's flex)" 165
+ "narrow 100,000 file names at the prompt (Emacs's flex)"
  (lambda ()
    (let ((paths nil))
      (dotimes (index 100000)
@@ -388,7 +502,7 @@ is called after each character as well."
          (unless (consp found) (error "No match")))))))
 
 (mega-bench-define
- "search: show 2000 hits" 5.3
+ "search: show 2000 hits"
  (lambda ()
    (require 'mega-search)
    (let ((lines (mapcar (lambda (index)
@@ -400,7 +514,7 @@ is called after each character as well."
          (error "Hits were lost"))))))
 
 (mega-bench-define
- "search: a real one, 300 files, with grep" 4.6
+ "search: a real one, 300 files, with grep"
  (lambda ()
    (require 'mega-search)
    (let ((directory (mega-bench--directory "bench-search-")))
@@ -413,7 +527,7 @@ is called after each character as well."
  :kind 'process)
 
 (mega-bench-define
- "run a program and wait for it, ten times" 7
+ "run a program and wait for it, ten times"
  (lambda ()
    (require 'mega-exec)
    (lambda ()
@@ -423,7 +537,7 @@ is called after each character as well."
  :kind 'process)
 
 (mega-bench-define
- "copy to and paste from the clipboard, ten times" 22
+ "copy to and paste from the clipboard, ten times"
  (lambda ()
    (require 'mega-edit)
    (let ((text (make-string 20000 ?x)))
@@ -446,7 +560,7 @@ is called after each character as well."
  :kind 'process)
 
 (mega-bench-define
- "format a 2000-line buffer on save" 5
+ "format a 2000-line buffer on save"
  (lambda ()
    (require 'mega-format)
    (let ((text (mega-bench--source 2000)))
@@ -458,14 +572,9 @@ is called after each character as well."
            (error "The formatter did not change the buffer"))))))
  :kind 'process)
 
-(defconst mega-bench--open-expected
-  '((mega-rust-mode . 104) (mega-zig-mode . 99) (mega-markdown-mode . 11))
-  "What opening a long file is expected to take, by mode.")
-
 (dolist (mode '(mega-rust-mode mega-zig-mode mega-markdown-mode))
   (mega-bench-define
    (format "open 4000 lines, highlighted: %s" mode)
-   (cdr (assq mode mega-bench--open-expected))
    (lambda ()
      (require 'mega-mode-rust)
      (require 'mega-mode-zig)
@@ -478,7 +587,7 @@ is called after each character as well."
            (font-lock-ensure)))))))
 
 (mega-bench-define
- "indentation guides over 4000 lines" 79
+ "indentation guides over 4000 lines"
  (lambda ()
    (require 'mega-indent-guides)
    (let ((text (mega-bench--source 4000)))
@@ -490,7 +599,7 @@ is called after each character as well."
          (font-lock-ensure))))))
 
 (mega-bench-define
- "save a file after a small edit, ten times" 12
+ "save a file after a small edit, ten times"
  (lambda ()
    (require 'mega-undo)
    (let* ((file (expand-file-name "small.txt" (mega-bench--directory "bench-save-")))
@@ -519,7 +628,7 @@ is called after each character as well."
       (insert line))))
 
 (mega-bench-define
- "save a file with a megabyte of undo history" 38
+ "save a file with a megabyte of undo history"
  (lambda ()
    (require 'mega-undo)
    (let* ((file (expand-file-name "long.txt" (mega-bench--directory "bench-undo-")))
@@ -533,7 +642,7 @@ is called after each character as well."
  :kind 'process)
 
 (mega-bench-define
- "open a file and get its undo history back" 70
+ "open a file and get its undo history back"
  (lambda ()
    (require 'mega-undo)
    (let* ((inhibit-message t)
@@ -566,7 +675,7 @@ is called after each character as well."
     buffer))
 
 (mega-bench-define
- "undo tree: draw a history of 2000 changes" 16
+ "undo tree: draw a history of 2000 changes"
  (lambda ()
    (require 'mega-undo-tree)
    (let ((buffer (mega-bench--branchy-buffer 2000)))
@@ -579,7 +688,7 @@ is called after each character as well."
          (kill-buffer buffer))))))
 
 (mega-bench-define
- "undo tree: twenty moves in a history of 2000 changes" 241
+ "undo tree: twenty moves in a history of 2000 changes"
  (lambda ()
    (require 'mega-undo-tree)
    (let ((buffer (mega-bench--branchy-buffer 2000)))
@@ -591,7 +700,7 @@ is called after each character as well."
          (kill-buffer buffer))))))
 
 (mega-bench-define
- "debugger: take in 1000 messages" 2.9
+ "debugger: take in 1000 messages"
  (lambda ()
    (require 'mega-dap)
    (let ((bytes (mapconcat
@@ -609,7 +718,7 @@ is called after each character as well."
            (error "Messages were lost")))))))
 
 (mega-bench-define
- "draw the home page 50 times" 111
+ "draw the home page 50 times"
  (lambda ()
    (require 'mega-home)
    (require 'mega-workspace)
@@ -636,7 +745,7 @@ is called after each character as well."
              (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
 (mega-bench-define
- "draw the cheat sheet 20 times" 6.2
+ "draw the cheat sheet 20 times"
  (lambda ()
    (require 'mega-help)
    (lambda ()
@@ -645,7 +754,7 @@ is called after each character as well."
 
 ;; Last, because it loads eglot, and nothing above should have had it.
 (mega-bench-define
- "language server: load eglot and connect, first time" 62
+ "language server: load eglot and connect, first time"
  (lambda ()
    (lambda ()
      (if (not (executable-find "python3"))
@@ -691,7 +800,7 @@ is called after each character as well."
              (kill-buffer buffer)))
          (list :ms elapsed
                :note (if loaded "eglot was loaded already" "eglot loaded on the way"))))))
- :rounds 1 :kind 'process :limit 400)
+ :rounds 1 :kind 'process)
 
 ;;;; Running them
 
@@ -713,8 +822,16 @@ machine was then, as the :lisp of `mega-bench--machine' says."
 (defun mega-bench--describe (machine)
   "MACHINE, as `mega-bench--machine' returns it, in words."
   (format "computing %.0f ms (%.0f where the figures were set), programs and disk %.0f ms (%.0f)"
-          (plist-get machine :lisp-ms) mega-bench-reference-ms
-          (plist-get machine :process-ms) mega-bench-process-reference-ms))
+          (plist-get machine :lisp-ms) (mega-bench-reference-ms)
+          (plist-get machine :process-ms) (mega-bench-process-reference-ms)))
+
+(defun mega-bench--record-to-add (name time factor)
+  "The record to put into the history if NAME is to be held to TIME.
+FACTOR is how slow this machine is; the record is for the reference one."
+  (format "(:ms %s :date %S :commit \"<the commit that changed it>\" :reason \"<why, and why not for less>\")"
+          (let ((ms (/ time factor)))
+            (if (< ms 10) (format "%.1f" ms) (format "%.0f" ms)))
+          (format-time-string "%Y-%m-%d")))
 
 (defun mega-bench-run ()
   "Run every benchmark, print one line each, and exit: 0 if none failed.
@@ -722,77 +839,117 @@ A line is a verdict, a tab, and the text: `ok', `slow', `bad', or `note'.
 `slow' is over one and a half times the expected, and not a failure."
   ;; As in a session that has finished starting.
   (setq gc-cons-threshold mega-gc-cons-threshold)
-  (let* ((machine (mega-bench--machine))
+  (let* ((only (getenv "MEGA_BENCH_ONLY"))
+         (only (and only (not (string-empty-p only)) only))
+         (problems (mega-bench-history-problems))
+         (machine (and (mega-bench-established (nth 0 mega-bench-machine-entries))
+                       (mega-bench-established (nth 1 mega-bench-machine-entries))
+                       (mega-bench--machine)))
          (by-hand (mega-bench--number "MEGA_BENCH_SCALE" 1))
          (tolerance (mega-bench--number "MEGA_BENCH_TOLERANCE" 3))
          (saved (mega-bench--saved (getenv "MEGA_BENCH_COMPARE")))
          (before (plist-get saved :times))
          (drift (mega-bench--number "MEGA_BENCH_TOLERANCE" 2))
          (times nil)
+         (over nil)
          (failed 0))
+    ;; First, the figures themselves: a time is only as good as its record.
+    (dolist (problem problems)
+      (setq failed (1+ failed))
+      (princ (format "bad\tthe history: %s\n" problem)))
+    (unless machine
+      (princ "bad\tnothing can be timed: the history does not say what the reference machine does\n")
+      (kill-emacs 1))
     (princ (format "note\tthe machine now: %s\n" (mega-bench--describe machine)))
     (dolist (benchmark (reverse mega-bench--list))
-      (let* ((name (car benchmark))
-             (expected (nth 1 benchmark))
-             (measure (lambda ()
-                        (condition-case err
-                            (mega-bench--measure benchmark)
-                          (error (format "%s" (error-message-string err))))))
-             (measured (funcall measure))
-             (factor (* by-hand (mega-bench--factor benchmark machine)))
-             (first-try nil))
-        ;; Over the limit: is it the code, or the machine just now?
-        (when (and expected (consp measured) (numberp (car measured))
-                   (> (car measured) (* factor (mega-bench--limit benchmark tolerance))))
-          (setq first-try (car measured)
-                machine (mega-bench--machine)
-                factor (* by-hand (mega-bench--factor benchmark machine))
-                measured (funcall measure)))
-        (cond
-         ((stringp measured)
-          (setq failed (1+ failed))
-          (princ (format "bad\t%s: could not run: %s\n" name measured)))
-         ((eq (car measured) :skip)
-          (princ (format "note\t%s: not timed: %s\n" name (cadr measured))))
-         (t
-          (push (cons name (car measured)) times)
-          (let* ((time (car measured))
-                 (was (cdr (assoc name before)))
-                 ;; How much slower the machine is now than at the saved run.
-                 (since (if saved
-                            (/ (plist-get machine :lisp) (plist-get saved :machine))
-                          1.0))
-                 (slower (and was (> was 0) (/ time was since)))
-                 (over (and expected
-                            (> time (* factor (mega-bench--limit benchmark tolerance)))))
-                 (drifted (and slower (> slower drift) (> time 2.0)))
-                 ;; Not a failure, and not to be read past either.
-                 (slow (and expected
-                            (not (plist-get (nthcdr 3 benchmark) :limit))
-                            (> time (* factor (max (* 1.5 expected) (+ expected 1.0))))))
-                 (text (concat
-                        (format "%-55s %7.1f ms" name time)
-                        (if expected
-                            (format "   expected %5.1f   x%.1f"
-                                    (* factor expected) (/ time (* factor expected)))
-                          (format "   nothing expected yet: %.1f on the reference machine"
-                                  (/ time factor)))
-                        (if (cdr measured) (format "   (%s)" (cdr measured)) "")
-                        (if first-try (format "   (%.1f ms at first)" first-try) "")
-                        (if slower (format "   x%.2f of the saved run" slower) ""))))
-            (when (or over drifted) (setq failed (1+ failed)))
-            (princ (format "%s\t%s%s\n"
-                           (cond ((or over drifted) "bad")
-                                 (slow "slow")
-                                 (t "ok"))
-                           text
-                           (cond (over (format "   OVER THE LIMIT of %.1f ms"
-                                               (* factor (mega-bench--limit benchmark
-                                                                            tolerance))))
-                                 (drifted "   SLOWER THAN IT WAS")
-                                 (t "")))))))))
+      (when (or (null only) (string-match-p only (car benchmark)))
+        (let* ((name (car benchmark))
+               (record (mega-bench-established name))
+               (expected (plist-get record :ms))
+               (measure (lambda ()
+                          (condition-case err
+                              (mega-bench--measure benchmark)
+                            (error (format "%s" (error-message-string err))))))
+               (measured (funcall measure))
+               (factor (* by-hand (mega-bench--factor benchmark machine)))
+               (first-try nil))
+          ;; Over the limit: is it the code, or the machine just now?
+          (when (and expected (consp measured) (numberp (car measured))
+                     (> (car measured) (* factor (mega-bench--limit record tolerance))))
+            (setq first-try (car measured)
+                  machine (mega-bench--machine)
+                  factor (* by-hand (mega-bench--factor benchmark machine))
+                  measured (funcall measure)))
+          (cond
+           ((stringp measured)
+            (setq failed (1+ failed))
+            (princ (format "bad\t%s: could not run: %s\n" name measured)))
+           ((eq (car measured) :skip)
+            (princ (format "note\t%s: not timed: %s\n" name (cadr measured))))
+           (t
+            (push (cons name (car measured)) times)
+            (let* ((time (car measured))
+                   (was (cdr (assoc name before)))
+                   ;; How much slower the machine is now than at the saved run.
+                   (since (if saved
+                              (/ (plist-get machine :lisp) (plist-get saved :machine))
+                            1.0))
+                   (slower (and was (> was 0) (/ time was since)))
+                   (limit (and expected (* factor (mega-bench--limit record tolerance))))
+                   (too-slow (and limit (> time limit)))
+                   (drifted (and slower (> slower drift) (> time 2.0)))
+                   ;; Not a failure, and not to be read past either.
+                   (slow (and expected
+                              (not (plist-get record :limit))
+                              (> time (* factor (max (* 1.5 expected) (+ expected 1.0))))))
+                   (text (concat
+                          (format "%-55s %7.1f ms" name time)
+                          (if expected
+                              (format "   expected %5.1f   x%.1f"
+                                      (* factor expected) (/ time (* factor expected)))
+                            "   nothing is expected of it yet")
+                          (if (cdr measured) (format "   (%s)" (cdr measured)) "")
+                          (if first-try (format "   (%.1f ms at first)" first-try) "")
+                          (if slower (format "   x%.2f of the saved run" slower) ""))))
+              (when (or too-slow drifted) (setq failed (1+ failed)))
+              (when (or too-slow slow)
+                (push (list name time factor record) over))
+              (princ (format "%s\t%s%s\n"
+                             (cond ((or too-slow drifted) "bad")
+                                   (slow "slow")
+                                   (t "ok"))
+                             text
+                             (cond (too-slow (format "   OVER THE LIMIT of %.1f ms" limit))
+                                   (drifted "   SLOWER THAN IT WAS")
+                                   (t ""))))
+              ;; A benchmark nobody has put on record yet: the record to add.
+              (unless expected
+                (princ (format "note\t  once it is committed, into %s:  (%S %s)\n"
+                               (file-name-nondirectory mega-bench-history-file) name
+                               (mega-bench--record-to-add name time factor))))))))))
     (princ (format "note\tthe machine at the end: %s\n"
                    (mega-bench--describe (mega-bench--machine))))
+    ;; What to do about a slow one, said where it will be read.
+    (when over
+      (princ (format "note\t\nnote\tOver its time: %s.  What is expected of whoever sees this is at the top of\n"
+                     (mapconcat (lambda (one) (format "`%s'" (car one))) (reverse over) ", ")))
+      (princ (format "note\t%s: first the cause, then the fix.\n"
+                     (file-relative-name mega-bench-history-file
+                                         (expand-file-name "../.." mega-test-dir))))
+      (dolist (one (reverse over))
+        (pcase-let ((`(,name ,time ,factor ,record) one))
+          (princ (format "note\t\nnote\t%s\n" name))
+          (princ (format "note\t  to find the commit:  git bisect start HEAD %s && git bisect run env MEGA_BENCH_ONLY=%s tests/test_mega2.sh bench\n"
+                         (plist-get record :commit)
+                         ;; In quotes a person can read: all of it literal
+                         ;; but a quote of its own, which ends them, is
+                         ;; said, and opens them again.
+                         (concat "'"
+                                 (string-replace "'" "'\\''"
+                                                 (concat "^" (regexp-quote name) "$"))
+                                 "'")))
+          (princ (format "note\t  only if it is the reasonable, direct and minimised price of a change that is wanted, one more record:\n"))
+          (princ (format "note\t    %s\n" (mega-bench--record-to-add name time factor))))))
     (when-let* ((file (getenv "MEGA_BENCH_SAVE")))
       (unless (string-empty-p file)
         (with-temp-file file

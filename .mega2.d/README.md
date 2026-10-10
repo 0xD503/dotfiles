@@ -201,6 +201,14 @@ cost time, keep a run with `MEGA_BENCH_SAVE=before.eld`; afterwards
 `MEGA_BENCH_COMPARE=before.eld` also fails on anything that became twice as
 slow as it was.
 
+What each benchmark is expected to take is on record in
+`tests/mega2/mega-bench-history.eld`, with the commit that made it so and the
+reason; there is no number anywhere else to change. When one is exceeded,
+whoever sees it finds the cause first (the stage prints the `git bisect`
+command) and fixes it. Only if the slowdown is the reasonable, direct and
+minimised price of a change that is wanted does the time go up, and then
+with a new record: the time, the commit that introduced it, and why.
+
 The `container` stage runs only when named. It starts one container with
 podman from an image you already have, with no network, runs, builds and
 debugs in it, and removes it; nothing is downloaded.
