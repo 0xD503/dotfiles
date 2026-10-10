@@ -64,24 +64,49 @@ Examples of that ordering already decided:
    - MEGA opens no network connection and has no telemetry. The only
      sanctioned download is Emacs's parser prompt, after you answer yes.
    - Code goes to Claude only on an explicit command, and only the text you
-     selected (or the function at point); on standard input, never on a
+     selected; with nothing selected, the function at point, in code only,
+     after its size was shown and agreed to. On standard input, never on a
      command line; a private file needs a typed "yes".
-   - gdb's debuginfod lookups, which name what you debug to a server, are
-     off.
-   - Language servers get telemetry switched off where they offer a switch.
-   - State directories are 0700. The kill ring is never saved. Files matched
-     by `mega-private-file-p` are left out of recent files, saved places and
-     persistent undo.
+   - A debugger's debuginfod lookups, which name what you debug to a
+     server, are off: every debugger is started with `DEBUGINFOD_URLS`
+     empty, lldb and those in a container included.
+   - Language servers get telemetry switched off where they offer a switch,
+     and a project's own server settings are merged under that, not over it.
+   - State directories are 0700. The kill ring is never saved.
+   - **One rule for what leaves no trace.** `mega-forgettable-file-p` is
+     asked by everything that writes something about a file to disk: recent
+     files, cursor places, the history of file prompts, recent projects,
+     workspaces (down to the buffer names in a saved window layout) and
+     persistent undo. It covers private files, by name or by where a link
+     leads; temporary directories, `$TMPDIR` included; and files that exist
+     for one command, such as a commit message.
 3. **Security — a cloned repository cannot run code by being opened.**
    - `enable-local-variables :safe`, no local `eval`, no remote dir-locals.
    - `compilation-read-command` stays on: it is the only reason Emacs accepts
      a project's `compile-command`.
-   - **Project trust.** Language servers, formatters and build tools run
-     code that belongs to the project (build scripts, macros, plugins). MEGA
-     asks once per project before it starts any of them, remembers the
-     answer, and in an untrusted project only edits text.
-   - A further prompt, tied to the file's hash, before anything from
-     `devcontainer.json` runs.
+   - **Project trust.** Language servers, syntax checkers, formatters,
+     tasks, debuggers and containers run code that belongs to the project
+     (build scripts, macros, plugins, a Makefile). None of them starts in a
+     project you have not trusted, and that includes what Emacs would start
+     by itself: its on-the-fly checker runs `make` for C and `perl -c` for
+     Perl. Trust is an act, `C-c y`, not an answer to a prompt met in
+     passing: MEGA never asks from a hook, a timer or a process filter,
+     only from a command that cannot go on without the answer. The
+     modeline shows `untrusted` where tools are held back.
+   - **What a decision covers.** A project, by its root. A file outside any
+     project: its directory and nothing below, and no longer once a project
+     appears there. The home directory and `/` are never a root, whatever
+     marks them. Decisions are data, written whole or not at all, and read
+     again when the file changes, so two sessions agree.
+   - **Emacs's own launch points.** A project's `compile-command` is taken
+     only in a trusted project. Every git that Emacs or MEGA starts runs
+     with `core.fsmonitor` off and bare repositories refused unless named,
+     because both are ways for a directory to run a program
+     (`mega-git-hardening`).
+   - A further approval, tied to a hash of `devcontainer.json` and of the
+     files it names, before anything from it runs. The screen shows what
+     will run, in order; what is mounted from the host; `privileged`; and
+     what is left to the official CLI, when that is what will act on it.
    - A one-shot Claude question never runs in the project: `claude --print`
      skips that program's own trust question, and a project can carry
      settings that run commands. It runs in an empty directory with tools,
@@ -96,17 +121,19 @@ Examples of that ordering already decided:
      itself — eglot's snippet hook, `undo-equiv-table` — are isolated,
      tested, and reported by the doctor if they change.
    - The configuration directory is read-only at runtime.
-5. **Extensibility.** Keys, languages, formatters, tasks, snippets, picker
+5. **Extensibility.** Keys, languages, kinds of project, snippets, picker
    sources and doctor sections are data tables or lists; machine overrides go
-   in `local.el`.
+   in `local.el`, keys included (`mega-keys-add`).
 6. **Maintainability.**
    - One module, one concern; explicit module list in `init.el`; no DSL;
      byte-compiles with zero warnings.
    - Every feature ships with unit tests; a feature without them is not done.
    - The user guide stays one short page.
-7. **Performance.** Startup ≤ 100 ms in a terminal; heavy modules load on
-   first use; typing is never blocked. These are goals and yield to
-   everything above.
+7. **Performance.** Startup ≤ 100 ms in a terminal, counting what is put
+   off until Emacs has started; heavy modules load on first use; typing is
+   never blocked, and neither is a save: every formatter, the language
+   server included, gets `mega-format-timeout` seconds and no more. These
+   are goals and yield to everything above.
 
 ## Features
 
@@ -124,10 +151,10 @@ project shell; editable grep results; GUD debuggers (gdb, lldb, pdb).
 | Feature | What it does |
 | --- | --- |
 | Popup | Child-frame popup primitive |
-| Completion menu | Appears as you type, with a documentation popup |
+| Completion menu | Appears as you type; fed by the language server, snippets and the buffer |
 | Live picker | Minibuffer picker with async sources, in-place toggles, export |
 | Project search | `git grep -PnI` or `rg --hidden`; toggles for case, untracked, hidden, ignored, literal/word, file glob |
-| File finder | Fuzzy over `git ls-files` / `rg --files` / `fd`, cached per project |
+| Project files | Emacs's own `C-c p f`, matching fuzzily. In a checkout the list is version control's; in a project without one MEGA lists it (`rg --files`, else `find`) and leaves out what a build made. Not cached |
 | Tasks | Build / run / test per project, with jump to error |
 | Format on save | editorconfig, then the language server or the language's own tool (rustfmt on the buffer; `cargo fmt` project-wide) |
 | Snippets | LSP-syntax tab stops; user snippets per mode |
@@ -136,7 +163,7 @@ project shell; editable grep results; GUD debuggers (gdb, lldb, pdb).
 | Undo | Tree drawn from Emacs's own undo list; history persisted per file |
 | Debugging | Picks the debugger and the program for the project; one set of keys for gdb, lldb and pdb. On the host through GUD, in a container through a debug adapter |
 | Debug adapter client | Own client for the Debug Adapter Protocol: breakpoints that outlive sessions, stack, variables, output |
-| Workspaces | Named tab layouts saved and resumed |
+| Workspaces | The open files and the window layout, saved under a name and resumed |
 | Small helpers | Indent guides, TODO highlight, symbol jump, trim changed lines, clipboard bridge |
 | Modes | Markdown, Zig, justfile, Rust fallback |
 
@@ -156,18 +183,35 @@ compose without the official CLI; RON mode; anything GUI-specific.
   lisp/
     base      mega-lib  mega-core  mega-keys  mega-ui  mega-nord-theme
               mega-session  mega-help  mega-doctor
-    kit       mega-popup  mega-pick  mega-exec                      (M1, M2)
-    features  mega-complete  mega-project  mega-workspace  mega-home
-              mega-search  mega-edit  mega-indent-guides  mega-trust
-              mega-undo  mega-undo-tree  mega-snippet  mega-format
-              mega-lsp  mega-lang  mega-task  mega-debug  mega-dap
-              mega-container  mega-remote  mega-llm  mega-zone      (M1–M6)
+    kit       mega-popup  mega-pick  mega-exec  mega-project  mega-trust
+              mega-lang  mega-compile
+    features  mega-complete  mega-workspace  mega-home  mega-search
+              mega-edit  mega-indent-guides  mega-undo  mega-undo-tree
+              mega-snippet  mega-format  mega-lsp  mega-task  mega-debug
+              mega-dap  mega-container  mega-remote  mega-llm  mega-zone
     modes     mega-mode-markdown  mega-mode-zig  mega-mode-just  mega-mode-rust
 tests/mega2/      ERT suite and the two start-up probes (not deployed)
 tests/test_mega2.sh
 ```
 
 - **Layers, dependencies pointing down only:** features → kit → base → Emacs.
+  A module `require`s what it calls, so the layering is in the code and not
+  only in this picture: taking a feature off the list in `init.el` removes
+  it, and taking a kit module off changes nothing while a feature needs it.
+- **Source here, a compiled copy in the cache.** MEGA's Lisp is deployed
+  as source, and nothing compiled is ever stored with it: not in this
+  directory, which is read-only, and not in the repository. A start that
+  finds no compiled copy runs the source and, once idle, has another Emacs
+  make one in the cache directory (`mega-compile`); later starts load it,
+  and Emacs's own JIT takes each compiled file it loads on to native code.
+  `early-init.el` decides which is loaded, before the first module, by a
+  fingerprint of every source file: a copy made from any other source is
+  not used, so compiled code can be absent but never stale. A copy is made
+  whole or not at all. The Emacs that makes it gets state directories of
+  its own to throw away and leaves without running exit hooks: compiling a
+  module loads the modules it needs, and one that saved something on the
+  way out would save it over yours. None does today; this is so that none
+  can.
 - **Loading.** `init.el` lists every module. A bare name loads at startup; a
   list such as `(mega-doctor :commands (mega-doctor))` loads on first use.
 - **Read-only configuration.** `init.el` points `user-emacs-directory` at the
@@ -176,22 +220,50 @@ tests/test_mega2.sh
   chemacs2 finds `init.el` through that variable. MEGA finds its own files
   through `mega-dir`.
 - **Keys are a table.** `mega-keys` builds the keymap and the cheat sheet, so
-  they cannot disagree.
+  they cannot disagree; `mega-keys-add` and `mega-keys-remove` change both
+  at once, from `local.el`, and a key whose command does not exist is
+  dropped at start-up. The keys of the places that have their own (the
+  completion menu, the undo tree, the home page) are described in
+  `mega-keys-elsewhere`, and a test holds that description to the keymaps,
+  key by key, in both directions.
 - **Logic separate from display.** Popup, picker, completion menu and undo
   tree keep a model apart from the code that draws it, so the model is
   unit-testable without a terminal.
-- **Languages are data.** One row names the modes, optional server
-  candidates, formatter, debugger and fallback mode.
+- **Two tables say what MEGA knows about code.** `mega-languages`, by
+  language: the modes, the server candidates, the formatters, the
+  indentation variable of each mode, the kind of debugger. Nothing else
+  knows which modes make up a language; snippets name a language, not its
+  modes. `mega-project-kinds`, by the file that marks a kind of project:
+  whether it marks a root, its tasks, the command that formats all of it.
+  `Cargo.toml` is named there once. What a module keeps beside them is for
+  what is in neither: a mode of no language, your own tasks for one project.
 - **`mega-exec` is the key abstraction** (from M1). Every process MEGA starts
-  goes through it, as an argument list, and it knows the project's context:
-  local, dev container, or TRAMP. That is what makes containers a
-  cross-cutting feature and not a rewrite of each module.
+  goes through it, as an argument list. The caller says where: the project's
+  tools (its container if it has one), where the files are (never a
+  container: a search, a file listing), or this machine whatever the buffer
+  visits (the clipboard, tmux, the container program itself). And how long
+  it can wait: `mega-exec-run` waits, interruptibly and with a limit that
+  covers sending the input; `mega-exec-start` calls back; `mega-exec-open`
+  hands over output as it comes, for a conversation such as a debug
+  adapter's. A project on another machine is not a context: its directory
+  is a remote file name and Emacs starts the program there. The few
+  programs that need a terminal of their own (GUD, the Claude session, a
+  container shell) get their argument list from `mega-exec-command`. That
+  is what makes containers a cross-cutting feature and not a rewrite of
+  each module.
 - **Dev Containers.** Parse `devcontainer.json` (own JSON-with-comments
-  reader), trust prompt, then `devcontainer up` if that CLI exists, else
-  podman/docker directly (image, initializeCommand, mounts, runArgs, capAdd,
-  securityOpt, env, remoteUser, ports, lifecycle commands; anything else is
-  refused by name). Files stay on the host and tools run in the container,
-  with one path-mapping layer; container-only files open through TRAMP.
+  reader), show what it will do and wait for approval, then start: with
+  `devcontainer up` if that CLI exists, else podman/docker directly. The
+  start runs in the background, a step at a time, with a log; Emacs is
+  never held. Every key of the file is in one of three lists: acted on
+  (image, mounts, runArgs, capAdd, securityOpt, privileged, init, the
+  environment, users, ports, the lifecycle commands), harmless to ignore,
+  or impossible without the official CLI (build, features, compose).
+  Without that CLI the last kind is refused by name, and so is a key in
+  none of the lists: MEGA does not guess at a setting. With it, both are
+  listed on the approval screen as the CLI's to act on. Files stay on the host and tools run in the container, with one
+  path-mapping layer, applied per language server; container-only files
+  open through TRAMP.
 - **Undo has no data structure of its own.** The tree is read off
   `buffer-undo-list` and `undo-equiv-table` each time it is drawn, and a
   move is a replay of the records between two states, recorded like any
@@ -223,7 +295,11 @@ tests/test_mega2.sh
   `configurationDone`, lldb the other way round; gdb's breakpoints start
   unverified and its frame ids go stale at every stop; lldb announces a
   step before answering it, ends the program's lines with CR LF, and
-  crashes with a page of backtrace when told to disconnect.
+  crashes with a page of backtrace when told to disconnect. And they cut
+  a frame's variables up differently: lldb gives one scope with arguments
+  and locals in it, gdb gives the two apart and leaves out whichever would
+  be empty; both say which is which, and neither marks the registers as
+  costly to read.
 - **Programs that take long** (`claude --print`) go through
   `mega-exec-start`, which returns at once and calls back; a mistake in the
   callback is reported, not raised, because it runs in the middle of
@@ -241,32 +317,50 @@ tests/test_mega2.sh
 | M4 | Dev Containers: native subset, hand-over to the official CLI | done |
 | M5 | GUD debugging, Claude, undo tree + persistence, remote, zone | done |
 | M6 | Debug adapter client, used for debugging in a container | done |
+| — | MEGA compiles itself: a compiled copy in the cache, made in the background, native through Emacs's JIT (requested after the review) | done |
+| — | Architecture review, 37 findings: trust as an act and not a prompt, Emacs's own launch points gated, one process layer with three places, one rule for what leaves no trace, the two tables, tests over the wire, the bench rebuilt | done |
 
 Each milestone ends with its unit tests, doctor rows and guide entries.
 
 ## Testing
 
-`tests/test_mega2.sh` runs five stages in a sandbox, without the network:
+`tests/test_mega2.sh` runs five stages in a sandbox, without the network,
+and a sixth when it is asked for by name:
 
 | Stage | Checks |
 | --- | --- |
 | lint | Every file byte-compiles with warnings as errors |
-| unit | The ERT suite, against a session started from the real init files |
-| boot | Startup fails no module, runs no program, opens no connection, and fits the time budget |
-| bench | What a person waits for, each against a budget: a keystroke, the completion menu, fuzzy file matching, search, save, undo history and tree, debugger messages, first use of a module |
-| terminal | Real sessions in a pseudo-terminal: 24-bit, 256 and 8 colours, under a tmux terminal type, through chemacs2, and an old Emacs being refused |
+| unit | The ERT suite, twice: on MEGA's Lisp as source and on its compiled copy, each against a session started from the real init files. A test that waits for something that never comes is stopped and Emacs says where it was waiting |
+| boot | Startup, from source and from the compiled copy, fails no module, runs no program, opens no connection, and fits the time budget, what is put off until Emacs has started included |
+| bench | What a person waits for, each against what it is expected to take: a keystroke, the modeline, the completion menu, listing and matching files, search, save, undo history and tree, debugger messages, first use of a module and of a language server |
+| terminal | Real sessions in a pseudo-terminal: 24-bit, 256 and 8 colours, under a tmux terminal type, through chemacs2, and an old Emacs being refused. And four starts in a row on one cache, as after an update: the first makes the compiled copy, the second runs from it, the third waits while Emacs compiles that to native code, the fourth is native from its first moment |
+| container | Only with `MEGA_REAL_IMAGE` set and named on the command line. A real container, started by podman from a `devcontainer.json` with no network and removed afterwards: programs run and a project built in it, and a program debugged with each debugger the image has, through the adapter client and through its console |
 
 Afterwards the configuration directory must be byte-for-byte what it was.
 
 The bench stage is how performance, last of the priorities, is still kept
-honest. A budget is about when a person would notice, several times what
-the code takes today, and the best of three rounds counts, so a busy machine
-does not fail it. Every time is printed beside its budget, and a run can be
-saved and compared with (`MEGA_BENCH_SAVE`, `MEGA_BENCH_COMPARE`), so a
-slowdown is seen while it is still far from its budget. A new feature with
-something a person waits on gets a benchmark in `tests/mega2/mega-bench.el`.
+honest. Each benchmark states what it took on the machine the figures were
+set on, and the run prints every time beside that figure. Over one and a
+half times it, a line is marked `SLOW` and the run passes; over three
+times, it fails. Two fixed pieces of work, one of Lisp and one of starting
+programs and using the disk, say how slow the machine is right now, and the
+figures are stretched by that; they are taken at the start and at the end,
+and again before any benchmark is called a failure, which is then run a
+second time. Memory is collected as in a running session. A run can be
+saved and compared with (`MEGA_BENCH_SAVE`, `MEGA_BENCH_COMPARE`). The
+harness was itself tried both ways: a threefold slowdown put into a copy of
+the code fails it, and a machine kept busy by twice as many spinning
+processes as it has processors does not. A new feature with something a
+person waits on gets a benchmark in `tests/mega2/mega-bench.el`.
 
-Three things learned while building it, worth keeping in mind:
+The promises about security and privacy are tested by what happens, not by
+what a variable holds: a file of every kind is opened in an untrusted
+directory and the programs that start are counted; a secret is edited,
+saved and closed, and the state directory is searched for its name; the
+stand-in language server writes down what it was told, so "telemetry is
+off" is read from the wire.
+
+Things learned while building it, worth keeping in mind:
 
 - Emacs renders no modeline and runs no `emacs-startup-hook` in batch mode.
   Anything that depends on either belongs in the terminal stage, and a probe
@@ -288,17 +382,79 @@ Three things learned while building it, worth keeping in mind:
 - ERT runs tests with `debug-on-error` on, which lets errors through
   `with-demoted-errors`. A test of "this failure is only a message" has to
   switch it off.
+- A synchronous request to a language server has no time limit in Emacs
+  31: eglot passes "none" explicitly, so `jsonrpc-default-request-timeout`
+  is never consulted. Anything MEGA asks a server from a hook is bounded
+  from outside, with `with-timeout`. Found by a stand-in server that never
+  answers; binding the variable had passed review and every other test.
+- Emacs remembers whether a directory is in a checkout, and gives a caller
+  that does not prompt an answer up to five minutes old. MEGA decides by the
+  project's root what may run, so `mega-project-current` asks for the
+  two-second answer a command gets.
+- ripgrep reads a `.gitignore` only inside a repository unless told
+  otherwise (`--no-require-git`), so in a project without version control
+  nothing keeps it out of `target/` but MEGA.
+- A shell's arithmetic prints a decimal comma in half the world's locales.
+  The runner's does not (`LC_ALL=C`).
+- Emacs's JIT compiles to native code what it loads *compiled*. Source
+  that is loaded as source stays interpreted for good: with nothing to
+  byte-compile MEGA's files, none of them was ever native, whatever the
+  build of Emacs. And a compiled file is taken on to native code only if
+  its source lies beside it, which is why the copy in the cache holds
+  both.
+- `secure-hash` and `md5` take a coding system into account, and on half
+  a megabyte that costs seven milliseconds; `buffer-hash` takes the bytes
+  as they are and costs half of one. The fingerprint is computed at every
+  start.
+- Compiling one module loads the modules it requires, in an Emacs that
+  only came to compile. Were one of those a module that saves history when
+  Emacs ends, it would save an empty one over yours. Tried without any
+  protection, nothing was written: no module requires such a one today.
+  The compiling Emacs is still given directories of its own and leaves
+  without running exit hooks, so that this stays true whoever requires
+  what later.
+- A stand-in does what its author knew the real thing to do. The first
+  run of the container stage found three faults that every test with a
+  stand-in had passed: the commands of a `devcontainer.json` ran before the
+  container's own `PATH` was read, so a `PATH` built on it found nothing;
+  lldb's adapter starts no program where the kernel refuses to fix
+  addresses, which is any container with its system-call filter on; and
+  with gdb only a function's arguments were shown, because gdb lists
+  arguments, locals and registers as three scopes, marks none as costly,
+  and the recording the stand-in was written from came from a function
+  without arguments. Each has a unit test now, and the stand-ins were
+  corrected to what was recorded.
+- A probe that plays the person must not say yes to everything: it will
+  agree to something nobody meant. The container probe answers the
+  questions it names, reports any other as a failure, and runs with a `git`
+  that refuses to fetch.
+- A variable of a library that is not loaded yet is not special. Bound
+  with `let` in a file with lexical binding it switches nothing off, and
+  the library then fails to load inside that `let`. Declare it first.
 - Tests are worth only what they can fail on. Each milestone's safety,
   privacy and security checks were run against deliberately broken copies
   of the code (`MEGA_TEST_CONFIG` points the suite at a copy).
 
 ## Open points
 
-- **Compiling MEGA's own Lisp.** It runs as source. If a hot path (fuzzy
-  scoring, in M1) needs compiling, the output must go to the cache directory.
-- **Native compilation.** Emacs compiles its bundled libraries in the
-  background the first time each is loaded. That is Emacs, not MEGA, and it
-  is left on; the boot test switches it off to listen for MEGA alone.
+- **What compiling buys**, measured on the machine the bench figures were
+  set on. Start-up: 50 ms as source, 36 ms from the compiled copy, 27 ms
+  as native code. Compiled against source, the large factors are in the
+  undo code (a megabyte of history brought back in 7 ms instead of 75, a
+  move in a tree of 2000 changes in 1.5 ms instead of 12); a keystroke
+  costs 0.020 ms instead of 0.027. The bench stage times the source, which
+  is the slowest MEGA ever runs and the only form every machine has from
+  the first start.
+- **What it leaves behind.** About 1 MB for the compiled copy and 5 to 8 MB
+  of native code, under `~/.cache/mega2`. Emacs keeps the native file of
+  every version of a module it ever compiled; nothing prunes those.
+  Deleting the cache directory is always safe.
+- **Native compilation is Emacs's.** MEGA makes the compiled copy; the
+  step from there to native code is Emacs's JIT, left as it comes, and it
+  takes what a session loads: the modules loaded at start in the first
+  session (about a quarter of a minute of background work), one that loads
+  on first use in the session that first uses it. The boot test switches
+  the JIT off to listen for MEGA alone.
 - **Parsers.** An Emacs built against tree-sitter 0.20 accepts ABI 13–14 only.
 - **Claude in the built-in terminal emulator** may render imperfectly. Inside
   tmux the session opens in a pane instead, which is the default there.
@@ -306,11 +462,14 @@ Three things learned while building it, worth keeping in mind:
   stand-in. The arguments of `mega-claude-print-arguments` are taken from
   the program's own help and their values pass its checks, but no question
   has been sent with them: that would have been a request nobody asked for.
-- **Debugging in a container** was run for real, beyond the stand-ins of
-  the suite, inside a container made from a `devcontainer.json`: lldb 19
-  and gdb 16.3, each through the adapter client and through its console
-  (the fallback), with a breakpoint set from the host buffer and the line
-  followed in the host file.
+- **Debugging in a container** is run for real by the container stage:
+  lldb 19 and gdb 16.3, each through the adapter client and through its
+  console (the fallback), with a breakpoint set from the buffer on the host
+  and the line followed in the host's file. It needs nothing of the
+  container: no added capability, no system-call filter switched off.
+  Where the kernel will not fix a program's addresses MEGA finds that out
+  first and tells lldb not to insist (`mega-dap--fixed-addresses-p`); the
+  price there is that addresses differ from run to run.
 - **Adapters.** lldb-dap and gdb are in `mega-dap-adapters`; both were run
   for real, lldb also on a Rust program (with the scripts Rust ships, a
   `String` shows as its text). debugpy would be one more row with a
@@ -324,8 +483,16 @@ Three things learned while building it, worth keeping in mind:
   more Python. On the host lldb could not be tried at all: none is
   installed.
 - **A project without version control** is recognised by a manifest at its
-  root (`mega-project-markers`). The list is deliberately short; a Makefile
-  is not on it, because one may sit in any directory.
+  root (`mega-project-markers`, by default the kinds marked `:root` in
+  `mega-project-kinds`). The list is deliberately short; a Makefile is not
+  on it, because one may sit in any directory. What a build put there is
+  left out of its files and of a search by name
+  (`mega-project-ignored-directories`), since no ignore file says so.
+- **Trust is by path.** A decision is kept for the root's file name, not
+  for the repository's identity: a different project unpacked at a path you
+  once trusted is trusted. Storing an identity beside the path was
+  considered in review and left out: there is none that a hostile checkout
+  could not copy.
 - **Undo tree extras** left out: a diff between two states, and marking the
   state that is saved on disk.
 - **One ruler.** Emacs draws a single ruler; several at once would be new code.

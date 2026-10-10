@@ -50,7 +50,8 @@
 (require 'mega-exec)
 (require 'mega-trust)
 
-(declare-function mega-project-root "mega-project")
+(require 'mega-project)
+(require 'mega-lang)
 (declare-function mega-dap-choose "mega-dap")
 (declare-function mega-dap-start "mega-dap")
 (declare-function mega-dap-active-p "mega-dap")
@@ -64,19 +65,42 @@
 
 (defvar gud-comint-buffer)
 (defvar gdb-debuginfod-enable-setting)
+(defvar gud-minor-mode)
 (defvar gdb-show-main)
 (defvar gdb-many-windows)
 (defvar gdb-restore-window-configuration-after-quit)
 (defvar gud-highlight-current-line)
 
 ;; Set before the libraries load, so the first session already has them.
-(setq gdb-debuginfod-enable-setting nil
-      ;; Two windows, the debugger and the source; the rest on request.
-      gdb-many-windows nil
-      gdb-show-main t
-      ;; Your windows come back the way they were when the debugger exits.
-      gdb-restore-window-configuration-after-quit t
-      gud-highlight-current-line t)
+(setq
+ ;; Two windows, the debugger and the source; the rest on request.
+ gdb-many-windows nil
+ gdb-show-main t
+ ;; Your windows come back the way they were when the debugger exits.
+ gdb-restore-window-configuration-after-quit t
+ gud-highlight-current-line t)
+
+;;;; Privacy: what a debugger may look up
+;;
+;; gdb and lldb can fetch debug information they lack from a "debuginfod"
+;; server, which tells that server what you are debugging; where the system
+;; names such servers in DEBUGINFOD_URLS, they do so without being asked.
+;; MEGA starts every debugger with that list empty, on this machine and in
+;; a container alike, and tells Emacs's own gdb interface not to ask either.
+
+(defcustom mega-debug-debuginfod nil
+  "Non-nil to let debuggers fetch debug information from debuginfod servers.
+Nil, the default, starts every debugger with no server to ask.  Set it
+in local.el; it is read when MEGA starts and again at each debugger."
+  :type 'boolean
+  :group 'mega)
+
+(setq gdb-debuginfod-enable-setting (and mega-debug-debuginfod 'ask))
+
+(defun mega-debug-environment ()
+  "The environment settings every debugger is started with."
+  (unless mega-debug-debuginfod
+    (list "DEBUGINFOD_URLS=")))
 
 ;;;; Which debugger
 
@@ -140,12 +164,13 @@ Smaller is better; a family that is not ranked comes after those that are."
 
 (defun mega-debug-language (root)
   "The language to debug in the current buffer, a key of `mega-debug-languages'.
-ROOT is the root of its project."
-  (cond ((derived-mode-p 'python-base-mode) 'python)
-        ((or (derived-mode-p 'rust-ts-mode 'mega-rust-mode)
-             (file-exists-p (expand-file-name "Cargo.toml" root)))
-         'rust)
-        (t 'native)))
+ROOT is the root of its project.  The language of the buffer says, by
+its row in `mega-languages'; if that says nothing, the kind of project
+does (`mega-project-kinds'); and what is left is a native program."
+  (or (mega-lang-get :debug)
+      (seq-some (lambda (kind) (plist-get (cdr kind) :debug))
+                (mega-project-kinds-of root))
+      'native))
 
 (defun mega-debug-choose (language root)
   "The preferred debugger for LANGUAGE that exists where ROOT's tools run.
@@ -255,28 +280,35 @@ by word; GUD splits it back into words and runs no shell."
 MEGA picks the debugger for the language and guesses the program; with
 a prefix argument CHOOSE, or when it cannot guess, it asks which."
   (interactive "P")
-  (let* ((root (file-name-as-directory
-                (expand-file-name (or (mega-project-root) default-directory))))
-         (language (mega-debug-language root))
-         (plan (mega-debug-plan language root)))
+  (let* ((root (mega-project-directory))
+         (language (mega-debug-language root)))
     (when (or (mega-debug-running-p) (mega-debug--adapter-running-p))
       (user-error "A debugger is already running (C-c g q stops it)"))
-    (unless plan
-      (user-error "No debugger for this is installed (tried: %s)"
-                  (mapconcat (lambda (entry) (plist-get (cdr entry) :program))
-                             (mega-debug-candidates language) ", ")))
+    ;; First of all: finding out which debugger there is can mean running
+    ;; one, to ask its version, and the project may say which program that
+    ;; name stands for.
     (unless (mega-trust-p root t "debug its program")
-      (user-error "This project is not trusted; see M-x mega-trust-project"))
-    (let* ((guess (mega-debug-default-target language root))
-           (target (if (and guess (not choose) (file-exists-p guess))
-                       guess
-                     (mega-debug--read-target language root)))
-           (default-directory root))
-      (setf (alist-get root mega-debug--targets nil nil #'equal) target)
-      (if (eq (car plan) 'dap)
-          (mega-dap-start (cdr plan) target root language)
-        (let ((command (mega-debug-command (cdr plan) target root)))
-          (funcall (car command) (cdr command)))))))
+      (user-error "This project is not trusted; C-c y trusts it"))
+    (let ((plan (mega-debug-plan language root)))
+      (unless plan
+        (user-error "No debugger for this is installed (tried: %s)"
+                    (mapconcat (lambda (entry) (plist-get (cdr entry) :program))
+                               (mega-debug-candidates language) ", ")))
+      (let* ((guess (mega-debug-default-target language root))
+             (target (if (and guess (not choose) (file-exists-p guess))
+                         guess
+                       (mega-debug--read-target language root)))
+             (default-directory root)
+             (environment (mega-debug-environment))
+             ;; For a debugger MEGA starts through its own process layer,
+             ;; and one Emacs starts itself, on this machine.
+             (mega-exec-environment (append environment mega-exec-environment))
+             (process-environment (append environment process-environment)))
+        (setf (alist-get root mega-debug--targets nil nil #'equal) target)
+        (if (eq (car plan) 'dap)
+            (mega-dap-start (cdr plan) target root language)
+          (let ((command (mega-debug-command (cdr plan) target root)))
+            (funcall (car command) (cdr command))))))))
 
 ;;;; File names from inside a container
 
@@ -323,13 +355,15 @@ session the action of the same meaning is done instead."
   "Set or, with REMOVE, remove a breakpoint on this line.
 Emacs's own interface needs a running debugger and is given COMMAND
 with ARGUMENT.  Where an adapter is or would be used, the breakpoint is
-MEGA's own and can be set at any time."
+MEGA's own and can be set at any time; whether one would be used is
+only looked into in a project you have trusted, because looking can
+mean running a program the project names."
   (cond ((mega-debug-running-p)
          (mega-debug--call command argument))
         ((or (mega-debug--adapter-running-p)
-             (let ((root (file-name-as-directory
-                          (expand-file-name (or (mega-project-root) default-directory)))))
-               (mega-debug-adapter (mega-debug-language root) root)))
+             (let ((root (mega-project-directory)))
+               (and (mega-trust-p root)
+                    (mega-debug-adapter (mega-debug-language root) root))))
          (mega-dap-toggle-breakpoint remove))
         (t (user-error "No debugger is running (C-c g g starts one)"))))
 
@@ -371,7 +405,14 @@ ARGUMENT is passed on to Emacs's own debugger command."
 gdb and lldb load a program and wait; this is what sets it going.  A
 debugger that starts its program at once, as pdb does, continues it."
   (interactive)
-  (mega-debug--call (if (fboundp 'gud-run) 'gud-run 'gud-cont) 1))
+  ;; By the debugger that is running now: Emacs keeps the commands of
+  ;; every debugger it has ever started in the session.
+  (mega-debug--call (if (and (buffer-live-p (bound-and-true-p gud-comint-buffer))
+                             (eq (buffer-local-value 'gud-minor-mode gud-comint-buffer)
+                                 'pdb))
+                        'gud-cont
+                      'gud-run)
+                    1))
 
 ;;;###autoload
 (defun mega-debug-quit ()
@@ -400,8 +441,6 @@ debugger that starts its program at once, as pdb does, continues it."
 
 ;;;; The doctor
 
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
 
 (defun mega-debug--doctor ()
   "Insert the doctor's section about debuggers."
@@ -418,10 +457,9 @@ debugger that starts its program at once, as pdb does, continues it."
                      (_ "stack and variables, with lldb-dap or gdb 14+ there")))
   (mega-doctor-row "debuginfod"
                    (pcase gdb-debuginfod-enable-setting
-                     ('nil "off: gdb fetches nothing from the network")
-                     ('ask "gdb asks before fetching debug information")
-                     (_ "ON: gdb tells a server what you debug"))
-                   (and (eq gdb-debuginfod-enable-setting t) 'warning)))
+                     ('nil "off: no debugger fetches anything from the network")
+                     (_ "ALLOWED: a debugger may tell a server what you debug"))
+                   (and mega-debug-debuginfod 'warning)))
 
 (add-to-list 'mega-doctor-sections #'mega-debug--doctor t)
 

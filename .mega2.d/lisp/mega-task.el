@@ -26,7 +26,7 @@
 (require 'mega-exec)
 (require 'mega-trust)
 
-(declare-function mega-project-root "mega-project")
+(require 'mega-project)
 (declare-function compilation-start "compile")
 (declare-function kill-compilation "compile")
 (declare-function recompile "compile")
@@ -36,31 +36,10 @@
 (defvar compilation-always-kill)
 (defvar compilation-filter-hook)
 
-(defvar mega-task-kinds
-  '(("Cargo.toml"
-     (build "cargo" "build") (run "cargo" "run") (test "cargo" "test")
-     (check "cargo" "check") (clippy "cargo" "clippy") (doc "cargo" "doc"))
-    ("go.mod"
-     (build "go" "build" "./...") (run "go" "run" ".") (test "go" "test" "./..."))
-    ("build.zig"
-     (build "zig" "build") (run "zig" "build" "run") (test "zig" "build" "test"))
-    ("CMakeLists.txt"
-     (configure "cmake" "-S" "." "-B" "build") (build "cmake" "--build" "build")
-     (test "ctest" "--test-dir" "build"))
-    ("Makefile"
-     (build "make") (test "make" "test") (run "make" "run") (clean "make" "clean"))
-    ("justfile"
-     (build "just" "build") (test "just" "test") (run "just" "run"))
-    ("pyproject.toml"
-     (test "python3" "-m" "pytest") (build "python3" "-m" "build")))
-  "Tasks by kind of project: (MARKER-FILE (NAME PROGRAM ARG...)...).
-A project has the tasks of every marker file found at its root; when two
-kinds define the same task, the first in this list wins.")
-
 (defcustom mega-task-overrides nil
   "Tasks you define yourself, per project.
 An alist of (ROOT . TASKS): ROOT is a project root as `C-c x x' shows
-it, TASKS a list of (NAME PROGRAM ARG...) like in `mega-task-kinds'.
+it, TASKS a list of (NAME PROGRAM ARG...) like in `mega-project-kinds'.
 They come before, and so replace, the ones MEGA works out."
   :type '(alist :key-type directory :value-type sexp)
   :group 'mega)
@@ -72,19 +51,15 @@ They come before, and so replace, the ones MEGA works out."
 
 (defun mega-task-list (root)
   "The tasks of the project at ROOT: a list of (NAME PROGRAM ARG...).
-Your own from `mega-task-overrides' come first; each name appears once."
+Your own from `mega-task-overrides' come first, then those of each kind
+of project it is (`mega-project-kinds'); each name appears once."
   (let ((tasks (copy-sequence
                 (cdr (assoc (abbreviate-file-name (file-name-as-directory root))
                             mega-task-overrides)))))
-    (dolist (kind mega-task-kinds)
-      (when (or (file-exists-p (expand-file-name (car kind) root))
-                ;; just also reads Justfile and .justfile.
-                (and (equal (car kind) "justfile")
-                     (seq-some (lambda (name) (file-exists-p (expand-file-name name root)))
-                               '("Justfile" ".justfile"))))
-        (dolist (task (cdr kind))
-          (unless (assq (car task) tasks)
-            (setq tasks (append tasks (list task)))))))
+    (dolist (kind (mega-project-kinds-of root))
+      (dolist (task (plist-get (cdr kind) :tasks))
+        (unless (assq (car task) tasks)
+          (setq tasks (append tasks (list task))))))
     tasks))
 
 ;;;; Running one
@@ -114,7 +89,7 @@ into one, word by word; nothing in it is interpreted by the shell."
 
 (defun mega-task--root ()
   "The project the current buffer's tasks belong to."
-  (or (mega-project-root) default-directory))
+  (mega-project-directory))
 
 (defun mega-task--run-named (name)
   "Run the task called NAME in the current project."

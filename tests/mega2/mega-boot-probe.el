@@ -6,7 +6,8 @@
 ;; attempt to run a program or open a connection, starts MEGA exactly as the
 ;; unit tests do, and then checks what happened.  tests/test_mega2.sh runs it
 ;; in a fresh batch Emacs, requires its "verdict=ok" line, and reads the
-;; "load-ms" line for the startup budget.
+;; "load-ms" and "after-ms" lines for the startup budget: the init files, and
+;; what they put off until Emacs has started.  Both are waited for.
 ;;
 ;; Two things about batch mode shape this file:
 ;;
@@ -66,7 +67,14 @@
     (* 1000.0 (float-time (time-since start))))
   "How long early-init.el and init.el took to load, in milliseconds.")
 
-(run-hooks 'emacs-startup-hook)
+(defvar mega-boot-probe-after-ms
+  (let ((start (current-time)))
+    (run-hooks 'emacs-startup-hook)
+    (* 1000.0 (float-time (time-since start))))
+  "How long what MEGA put off until Emacs had started took, in milliseconds.
+That is everything on `emacs-startup-hook'.  The home page is not in
+it: a batch Emacs has no screen to show one on.  Drawing it is timed by
+the bench stage, and seen on a real terminal by the terminal stage.")
 
 (unless (bound-and-true-p mega-supported-p)
   (mega-boot-probe--problem "this Emacs is not supported: %s" emacs-version))
@@ -88,6 +96,14 @@
                             (reverse mega-boot-probe-warnings)))
 (when (file-in-directory-p user-emacs-directory (getenv "MEGA_TEST_CONFIG"))
   (mega-boot-probe--problem "user-emacs-directory is inside the configuration"))
+(pcase (getenv "MEGA_TEST_FORM")
+  ("compiled"
+   (unless (and (bound-and-true-p mega-compiled-p)
+                (not (interpreted-function-p (symbol-function 'mega-trust-p))))
+     (mega-boot-probe--problem "the compiled copy was to be loaded, and the source was")))
+  (_
+   (when (bound-and-true-p mega-compiled-p)
+     (mega-boot-probe--problem "the source was to be loaded, and a compiled copy was"))))
 (unless (eql gc-cons-threshold (bound-and-true-p mega-gc-cons-threshold))
   (mega-boot-probe--problem "the garbage collector was left at %s" gc-cons-threshold))
 (dolist (feature '(package ispell flyspell eglot tramp url))
@@ -95,6 +111,7 @@
     (mega-boot-probe--problem "%s was loaded at startup" feature)))
 
 (princ (format "load-ms=%.1f\n" mega-boot-probe-load-ms))
+(princ (format "after-ms=%.1f\n" mega-boot-probe-after-ms))
 (dolist (problem (reverse mega-boot-probe-problems))
   (princ (format "problem: %s\n" problem)))
 (princ (format "verdict=%s\n" (if mega-boot-probe-problems "bad" "ok")))

@@ -62,6 +62,7 @@
     mega-workspace   ; files and windows put away and brought back
     mega-home        ; the page Emacs opens on
     mega-exec        ; the one way MEGA runs a program
+    mega-compile     ; a compiled copy of all this, kept in the cache
     mega-trust       ; which projects may run their own code
     mega-popup       ; a small window that floats over the text
     mega-complete    ; the completion menu
@@ -119,11 +120,22 @@ Nothing was configured: this is plain Emacs."
   ;; because its main job is choosing: anything a module reads while loading
   ;; must already be set.  Whatever has to happen after a module loads goes
   ;; in `with-eval-after-load'.
+  ;;
+  ;; A mistake in it is reported like a module that failed, and the modules
+  ;; load regardless: the settings that keep your work and your data safe
+  ;; must not depend on a file that is edited by hand.
   (let ((local (expand-file-name "local.el" mega-dir)))
     (when (file-readable-p local)
-      (load local :noerror :nomessage)))
+      (condition-case err
+          (load local :noerror :nomessage)
+        (error
+         (push (cons 'local.el (error-message-string err)) mega-module-failures)))))
 
   (mapc #'mega-load-module mega-modules)
+
+  ;; A module that is not on the list any more takes its keys with it.
+  (when (fboundp 'mega-keys-prune)
+    (mega-keys-prune))
 
   (add-hook 'emacs-startup-hook #'mega-report-module-failures 90))
 

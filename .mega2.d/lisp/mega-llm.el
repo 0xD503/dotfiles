@@ -22,9 +22,10 @@
 ;; back, and Claude can touch nothing.
 ;;
 ;; Privacy.  Text leaves this machine only when you press one of these keys,
-;; and only the text you selected (for `e' and `r', the function at point if
-;; nothing is selected), with the file's name inside the project.  Nothing
-;; is sent in the background, ever.  A file `mega-private-file-p' recognises
+;; and only the text you selected, with the file's name inside the project.
+;; With nothing selected, `e' and `r' offer the function the cursor is in,
+;; say how many lines that is, and send it only on a yes; outside code they
+;; send nothing unselected at all.  Nothing is sent in the background, ever.  A file `mega-private-file-p' recognises
 ;; is sent only after you confirm with a typed "yes".  The text goes to the
 ;; program on its standard input, never on its command line, where other
 ;; users of the machine could read it.
@@ -44,8 +45,7 @@
 (require 'mega-lib)
 (require 'mega-exec)
 
-(declare-function mega-project-root "mega-project")
-(declare-function diff-no-select "diff")
+(require 'mega-project)
 (declare-function term-mode "term")
 (declare-function term-char-mode "term")
 (declare-function make-term "term")
@@ -92,16 +92,25 @@ sent on standard input."
 
 (defun mega-claude--root ()
   "The project the current buffer belongs to, or its directory."
-  (file-name-as-directory
-   (expand-file-name (or (mega-project-root) default-directory))))
+  (mega-project-directory))
 
 (defun mega-claude--scope (&optional region-only)
   "What to send from the current buffer: (START . END), or nil.
-The region when there is one; otherwise the function at point, unless
-REGION-ONLY is non-nil."
+The region when there is one.  Otherwise, unless REGION-ONLY is non-nil,
+the function at point, and only in a buffer of code: elsewhere \"the
+function at point\" can be most of the file."
   (cond ((use-region-p) (cons (region-beginning) (region-end)))
         (region-only nil)
-        (t (bounds-of-thing-at-point 'defun))))
+        ((derived-mode-p 'prog-mode) (bounds-of-thing-at-point 'defun))))
+
+(defun mega-claude--confirm-scope (scope)
+  "Signal an error unless the user agrees to send SCOPE, a (START . END).
+Asked only when nothing was selected: text you selected you chose; text
+MEGA chose for you, you are shown the size of first."
+  (unless (or (use-region-p)
+              (y-or-n-p (format "Nothing is selected.  Send the function at point, %d lines, to Claude? "
+                                (mega-claude--lines scope))))
+    (user-error "Nothing was sent")))
 
 (defun mega-claude--confirm-private ()
   "Signal an error unless text of the current buffer may be sent.
@@ -169,8 +178,9 @@ On failure THEN is not called and the reason is reported."
         (mega-exec-start
          mega-claude-program (mega-claude--print-command)
          :directory (mega-claude--directory)
-         ;; Your own program and sign-in, not something in a container.
-         :local t
+         ;; Your own program and sign-in: on this machine, not in a container
+         ;; and not wherever the file being edited happens to live.
+         :here t
          :input prompt
          :then (lambda (result)
                  (setq mega-claude--request nil)
@@ -260,6 +270,7 @@ REWRITE, when non-nil, is the rewrite the buffer then proposes."
     (unless scope
       (user-error "Select the text to explain first"))
     (mega-claude--confirm-private)
+    (mega-claude--confirm-scope scope)
     (let ((heading (format "%s, %d lines" (mega-claude--label)
                            (mega-claude--lines scope))))
       (mega-claude--ask
@@ -271,8 +282,9 @@ REWRITE, when non-nil, is the rewrite the buffer then proposes."
 ;;;; Rewriting
 
 (defun mega-claude--strip-fence (answer)
-  "ANSWER without the code fence Claude may have put around all of it."
-  (let* ((text (string-trim answer))
+  "ANSWER without the code fence Claude may have put around all of it.
+Blank lines around it go too; the indentation of its first line stays."
+  (let* ((text (string-trim answer "[\n\r]+" "[ \t\n\r]+"))
          (fence (and (string-match "\\``\\{3,\\}" text) (match-string 0 text)))
          (first (and fence (string-search "\n" text)))
          (last (and first (- (length text) (length fence) 1))))
@@ -288,29 +300,34 @@ The fence is removed, and the text ends in a newline exactly if OLD did."
 
 (defun mega-claude--difference (old new)
   "The difference between the strings OLD and NEW, as text to show.
-A unified diff when the `diff' program exists, else NEW itself."
+A unified diff when the `diff' program exists, else NEW itself.
+
+`diff' compares files, so both texts are written down for it: into
+MEGA's own cache directory, which only you can read, and not into the
+shared temporary directory, since the text may come from a private file.
+They are deleted at once."
   (if (not (mega-exe-p "diff"))
       new
-    (let ((a (generate-new-buffer " *mega-claude-old*"))
-          (b (generate-new-buffer " *mega-claude-new*"))
-          (out (generate-new-buffer " *mega-claude-diff*")))
+    (let* ((directory (mega-cache "claude-diff/"))
+           (before (make-temp-file (expand-file-name "before-" directory)))
+           (after (make-temp-file (expand-file-name "after-" directory)))
+           (coding-system-for-write 'utf-8-unix))
       (unwind-protect
           (progn
-            (with-current-buffer a (insert old))
-            (with-current-buffer b (insert new))
-            (let ((inhibit-message t))
-              (diff-no-select a b "-u" t out))
-            (with-current-buffer out
-              (goto-char (point-min))
-              ;; Keep the hunks; the lines around them name temporary files.
-              (if (re-search-forward "^@@" nil t)
-                  (let ((start (match-beginning 0)))
-                    (goto-char (point-max))
-                    (when (re-search-backward "^Diff finished" nil t)
-                      (skip-chars-backward "\n"))
-                    (buffer-substring-no-properties start (point)))
-                "(Claude returned the text unchanged.)")))
-        (mapc #'kill-buffer (list a b out))))))
+            (write-region old nil before nil 'silent)
+            (write-region new nil after nil 'silent)
+            (let* ((result (mega-exec-run "diff" (list "-u" before after)
+                                          :here t :timeout 10))
+                   (output (plist-get result :output))
+                   (hunks (string-match "^@@" output)))
+              (cond ((eql (plist-get result :status) 0)
+                     "(Claude returned the text unchanged.)")
+                    ;; From the first hunk on: the two lines before it name
+                    ;; the temporary files.
+                    (hunks (string-trim-right (substring output hunks)))
+                    (t new))))
+        (delete-file before)
+        (delete-file after)))))
 
 (defun mega-claude--propose (rewrite answer)
   "Show ANSWER as the rewrite REWRITE proposes, unless the text has moved on."
@@ -352,7 +369,9 @@ only when you press RET on it."
        (user-error "Select the text to rewrite first"))
      (mega-claude--confirm-private)
      (list (read-string
-            (format "Rewrite these %d lines how? "
+            (format (if (use-region-p)
+                        "Rewrite these %d lines how? "
+                      "Nothing is selected.  Rewrite the function at point, %d lines, how? ")
                     (mega-claude--lines (mega-claude--scope)))))))
   (when (string-empty-p (string-trim instruction))
     (user-error "Say how to rewrite it"))
@@ -406,7 +425,7 @@ SESSION is a tmux pane id, a string, or a terminal buffer.")
 
 (defun mega-claude--tmux (&rest arguments)
   "Run tmux with ARGUMENTS and return what `mega-exec-run' returns."
-  (mega-exec-run "tmux" arguments :local t :timeout 5))
+  (mega-exec-run "tmux" arguments :here t :timeout 5))
 
 (defun mega-claude--session (root)
   "The live Claude session of the project at ROOT, or nil."
@@ -438,10 +457,15 @@ SESSION is a tmux pane id, a string, or a terminal buffer.")
          (string-trim (plist-get result :output))))
       (_
        (require 'term)
-       (let ((buffer (apply #'make-term
-                            (format "claude: %s"
-                                    (file-name-nondirectory (directory-file-name root)))
-                            mega-claude-program nil mega-claude-arguments)))
+       ;; On this machine, and with a terminal of its own, which is why
+       ;; Emacs's terminal emulator starts it; the argument list still comes
+       ;; from the one place that makes them.
+       (let* ((command (mega-exec-command mega-claude-program mega-claude-arguments
+                                          root t))
+              (buffer (apply #'make-term
+                             (format "claude: %s"
+                                     (file-name-nondirectory (directory-file-name root)))
+                             (car command) nil (cdr command))))
          (with-current-buffer buffer
            (term-mode)
            (term-char-mode))
@@ -461,13 +485,21 @@ SESSION is a tmux pane id, a string, or a terminal buffer.")
         (pop-to-buffer session)
       (mega-claude--tmux "select-pane" "-t" session))))
 
+(defun mega-claude--pasteable (text)
+  "TEXT as it may be pasted into a terminal: without control characters.
+A paste is fenced off by two escape sequences, and the terminal trusts
+whatever lies between them.  Text that carried the closing one could end
+the paste early, and what followed would be typed, and sent, as if by
+you.  Newlines and tabs are kept; a carriage return is not one of them."
+  (replace-regexp-in-string "[\u0000-\u0008\u000b-\u001f\u007f-\u009f]" "" text))
+
 ;;;###autoload
 (defun mega-claude-send-region (start end)
   "Paste the text from START to END into this project's Claude session.
 It is pasted, not sent: read it over there and press RET yourself."
   (interactive "r")
   (let ((session (mega-claude--session (mega-claude--root)))
-        (text (buffer-substring-no-properties start end)))
+        (text (mega-claude--pasteable (buffer-substring-no-properties start end))))
     (unless session
       (user-error "This project has no Claude session yet (C-c l c starts one)"))
     (mega-claude--confirm-private)
@@ -476,7 +508,7 @@ It is pasted, not sent: read it over there and press RET yourself."
         (process-send-string (get-buffer-process session)
                              (concat "\e[200~" text "\e[201~"))
       (let ((loaded (mega-exec-run "tmux" '("load-buffer" "-b" "mega-claude" "-")
-                                   :local t :input text :timeout 5)))
+                                   :here t :input text :timeout 5)))
         (unless (eql 0 (plist-get loaded :status))
           (error "tmux did not take the text: %s"
                  (string-trim (plist-get loaded :error))))
@@ -485,8 +517,6 @@ It is pasted, not sent: read it over there and press RET yourself."
 
 ;;;; The doctor
 
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
 
 (defun mega-claude--doctor ()
   "Insert the doctor's section about Claude."

@@ -75,6 +75,10 @@
    (:eval (when (buffer-narrowed-p) " Narrow"))
    "  " mode-name mode-line-process
    (:eval (mega-modeline--vc))
+   ;; Kept per buffer by mega-trust.el; nothing is looked up here.
+   (mega-trust-held
+    (:propertize "  untrusted" face mega-modeline-remote
+                 help-echo "Its language server, diagnostics and formatter are held back: C-c y trusts the project"))
    ;; Diagnostics, drawn by flymake itself whenever it is on in the buffer.
    (flymake-mode ("  " flymake-mode-line-counters))
    "  " mode-line-misc-info))

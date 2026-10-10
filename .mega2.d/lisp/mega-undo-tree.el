@@ -30,6 +30,12 @@
 ;; exactly from the one state to the other; if anything else happens, the
 ;; change is still recorded, and the worst case is one more `o' on screen.
 ;;
+;; One thing a move does goes beyond recording: it shortens the list again
+;; where the move only led back to where the list once ended.  That throws
+;; records away, so it does not rest on any claim that two states are equal:
+;; it is done only back to a state in which the text was actually seen, and
+;; found, by hash, to be the text there is now.
+;;
 ;; Model and display are separate.  `mega-undo-tree-build', `-route',
 ;; `-layout' and `-lines' are plain functions of data and are what the tests
 ;; exercise; the commands at the end are thin.
@@ -110,21 +116,23 @@ if FROM and TO are the same node."
             (setq best (cons source dest)))))
       best)))
 
-(defun mega-undo-tree-trim-point (tree)
-  "The state TREE's undo list can be cut back to without losing a node.
+(defun mega-undo-tree-trim-points (tree)
+  "The states TREE's undo list could be cut back to without losing a node.
 Moving about adds groups to the list that lead only to states it already
 had.  The list may end at any state of the current node that is no older
 than the newest node: every node then still has the state that made it.
-Return the oldest such state, or nil if that is the newest state anyway."
+Return those states, oldest first, without the newest state of all, at
+which the list ends anyway.
+
+Whether the text really is what such a state says is for the caller to
+check; see `mega-undo-tree-go'."
   (let* ((states (plist-get tree :states))
+         (last (1- (length (plist-get tree :node))))
          (newest 0))
     (dotimes (node (plist-get tree :count))
       (setq newest (max newest (car (aref states node)))))
-    (let ((state (seq-find (lambda (state) (>= state newest))
-                           (aref states (mega-undo-tree-current tree)))))
-      (and state
-           (< state (1- (length (plist-get tree :node))))
-           state))))
+    (seq-filter (lambda (state) (and (>= state newest) (< state last)))
+                (aref states (mega-undo-tree-current tree)))))
 
 ;;;; Where each node is drawn
 
@@ -254,10 +262,37 @@ end exactly at DEST."
                  (or end (mega-undo-origin buffer-undo-list t))
                  undo-equiv-table)))))
 
+(defvar-local mega-undo-tree--seen nil
+  "The text this buffer was seen to have in states of its undo list.
+A hash table from the tail of the list that begins a state to a hash of
+the text, noted whenever the text is known to be in that state: when the
+list ends there.")
+
+(defun mega-undo-tree--text-hash ()
+  "A hash of the whole text of the current buffer, or nil if it is too large."
+  (when (<= (buffer-size) mega-undo-max-file-size)
+    (car (mega-undo--fingerprint))))
+
+(defun mega-undo-tree--note-state ()
+  "Note that the current text is the state the undo list now ends in."
+  (let ((head (mega-undo-tree--strip buffer-undo-list))
+        (hash (mega-undo-tree--text-hash)))
+    (when (and (consp head) hash)
+      (unless mega-undo-tree--seen
+        (setq mega-undo-tree--seen (make-hash-table :test #'eq :weakness 'key)))
+      (puthash head hash mega-undo-tree--seen))))
+
 (defun mega-undo-tree-go (buffer choose)
   "Move BUFFER's text to another node of its undo tree.
 CHOOSE is called with the tree and the current node, and returns the
-node to go to, or nil for none.  Return non-nil if the text moved."
+node to go to, or nil for none.  Return non-nil if the text moved.
+
+A move adds a group to the undo list.  Where that only leads back to a
+state the list already ended in once, the list is cut back to there, so
+that wandering about does not push your oldest history out.  Cutting
+discards records, and is the one thing here that could not be undone, so
+it is done on evidence and not on the list's word: only back to a state
+in which this very text was seen, compared by hash."
   (with-current-buffer buffer
     (barf-if-buffer-read-only)
     (when (buffer-narrowed-p)
@@ -269,12 +304,20 @@ node to go to, or nil for none.  Return non-nil if the text moved."
            (target (funcall choose tree current))
            (route (and target (mega-undo-tree-route tree current target))))
       (when route
+        (mega-undo-tree--note-state)
         (mega-undo-tree--replay (plist-get read :states) (car route) (cdr route))
-        ;; The move added a group; drop what that made redundant.
+        (mega-undo-tree--note-state)
         (let* ((read (mega-undo-tree--read buffer))
-               (state (mega-undo-tree-trim-point (plist-get read :tree))))
+               (states (plist-get read :states))
+               (hash (mega-undo-tree--text-hash))
+               (state (and hash
+                           (seq-find (lambda (state)
+                                       (equal (gethash (aref states state)
+                                                       mega-undo-tree--seen)
+                                              hash))
+                                     (mega-undo-tree-trim-points (plist-get read :tree))))))
           (when state
-            (setq buffer-undo-list (aref (plist-get read :states) state))
+            (setq buffer-undo-list (aref states state))
             (undo-boundary)))
         t))))
 

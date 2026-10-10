@@ -10,6 +10,9 @@
 
 (defvar mega-test-pwned)
 
+(defvar mega-lang-test--y-or-n-p (symbol-function 'y-or-n-p)
+  "Emacs's own `y-or-n-p', to check that it is put back.")
+
 (defmacro mega-lang-test--with-parsers (available &rest body)
   "Run BODY as if exactly the parsers in AVAILABLE were installed.
 Nothing is ever offered for installation, and no decision is recorded."
@@ -45,7 +48,104 @@ Nothing is ever offered for installation, and no decision is recorded."
         (should (stringp pattern))
         (string-match-p pattern ""))
       (dolist (server (plist-get row :servers))
-        (should (seq-every-p #'stringp server))))))
+        (should (seq-every-p #'stringp server)))
+      ;; A formatter is an argument list; the only symbols in it are the
+      ;; ones mega-format.el knows how to fill in.
+      (dolist (formatter (plist-get row :formatters))
+        (should (stringp (car formatter)))
+        (dolist (argument formatter)
+          (should (or (stringp argument)
+                      (memq argument '(file edition assume-filename))))))
+      (dolist (key '(:indent :ts-indent))
+        (should (symbolp (plist-get row key))))
+      (should (memq (plist-get row :debug) '(nil rust python native)))
+      ;; Nothing in a row that no module reads.
+      (let ((keys nil) (rest row))
+        (while rest (push (car rest) keys) (setq rest (cddr rest)))
+        (dolist (key keys)
+          (should (memq key '(:ts :parser :plain :patterns :servers :formatters
+                              :indent :ts-indent :debug))))))))
+
+(ert-deftest mega-lang-a-mode-belongs-to-one-language ()
+  (dolist (expected '((c-mode . c) (c-ts-mode . c) (c++-mode . cpp) (c++-ts-mode . cpp)
+                      (rust-ts-mode . rust) (mega-rust-mode . rust)
+                      (python-mode . python) (python-ts-mode . python)
+                      (sh-mode . shell) (bash-ts-mode . shell)
+                      (js-mode . javascript) (js-ts-mode . javascript)
+                      (typescript-ts-mode . typescript) (tsx-ts-mode . tsx)
+                      ;; Derives from js-mode, and is JSON all the same.
+                      (js-json-mode . json) (json-ts-mode . json)
+                      (mega-zig-mode . zig) (mega-markdown-mode . markdown)
+                      (verilog-mode . verilog)
+                      (fundamental-mode . nil) (text-mode . nil) (prog-mode . nil)
+                      (emacs-lisp-mode . nil)))
+    (should (equal (cons (car expected) (mega-lang-name (car expected))) expected)))
+  ;; A mode somebody derives from one of ours is of the same language.
+  (define-derived-mode mega-lang-test-child-mode python-mode "Child")
+  (should (eq (mega-lang-name 'mega-lang-test-child-mode) 'python))
+  (should (equal (mega-lang-get :debug 'mega-lang-test-child-mode) 'python))
+  ;; In a buffer, with nothing said, it is the buffer's own mode.
+  (with-temp-buffer
+    (let ((inhibit-message t)) (c-mode))
+    (should (eq (mega-lang-name) 'c))
+    (should (equal (mega-lang-get :formatters) '(("clang-format" assume-filename))))))
+
+(ert-deftest mega-lang-the-indentation-variable-is-the-mode-s-own ()
+  "A language has two modes, and they do not always share the variable."
+  (dolist (expected '((c-mode . c-basic-offset) (c++-mode . c-basic-offset)
+                      (c-ts-mode . c-ts-mode-indent-offset)
+                      (c++-ts-mode . c-ts-mode-indent-offset)
+                      (rust-ts-mode . rust-ts-mode-indent-offset)
+                      (mega-rust-mode . mega-simple-indent-offset)
+                      (python-mode . python-indent-offset)
+                      (python-ts-mode . python-indent-offset)
+                      (sh-mode . sh-basic-offset) (bash-ts-mode . sh-basic-offset)
+                      (js-mode . js-indent-level) (js-ts-mode . js-indent-level)
+                      (js-json-mode . js-indent-level)
+                      (json-ts-mode . json-ts-mode-indent-offset)
+                      (typescript-ts-mode . typescript-ts-mode-indent-offset)
+                      (tsx-ts-mode . typescript-ts-mode-indent-offset)
+                      (go-ts-mode . go-ts-mode-indent-offset)
+                      (lua-mode . lua-indent-level) (lua-ts-mode . lua-ts-indent-offset)
+                      (verilog-mode . verilog-indent-level)
+                      (mega-zig-mode . mega-simple-indent-offset)
+                      (mega-just-mode . mega-simple-indent-offset)
+                      (mega-markdown-mode . nil) (text-mode . nil)))
+    (should (equal (cons (car expected) (mega-lang-indent-variable (car expected)))
+                   expected))))
+
+(ert-deftest mega-lang-adding-a-language-is-adding-a-row ()
+  "One row, and formatting, indentation guides, debugging and snippets follow."
+  (require 'mega-format)
+  (require 'mega-indent-guides)
+  (require 'mega-debug)
+  (require 'mega-snippet)
+  (define-derived-mode mega-lang-test-kotlin-mode prog-mode "Kotlin")
+  (defvar mega-lang-test-kotlin-indent 6)
+  (let ((mega-languages
+         (cons '(kotlin :plain mega-lang-test-kotlin-mode
+                        :formatters (("ktfmt" "--stdin-name" file "-"))
+                        :indent mega-lang-test-kotlin-indent
+                        :debug python)
+               mega-languages))
+        (mega-snippets (cons '((kotlin) ("fun" . "fun ${1:name}() {\n    $0\n}"))
+                             mega-snippets))
+        (mega-exec-context-functions nil))
+    (mega-test-with-directory dir
+      (with-temp-buffer
+        (setq buffer-file-name (expand-file-name "Main.kt" dir))
+        (unwind-protect
+            (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
+              (mega-lang-test-kotlin-mode)
+              (should (eq (mega-lang-name) 'kotlin))
+              (should (equal (mega-format-command)
+                             (list "ktfmt" "--stdin-name" buffer-file-name "-")))
+              (should (= (mega-indent-guides-offset) 6))
+              (should (eq (mega-debug-language dir) 'python))
+              (should (assoc "fun" (mega-snippet-available)))
+              ;; And what every code buffer gets is still there.
+              (should (assoc "todo" (mega-snippet-available))))
+          (setq buffer-file-name nil))))))
 
 (ert-deftest mega-lang-every-mode-in-the-table-exists ()
   (dolist (spec mega-languages)
@@ -98,29 +198,56 @@ Nothing is ever offered for installation, and no decision is recorded."
         (should-not (mega-lang-parser-p 'rust))
         (should-not asked)))))
 
+(defmacro mega-lang-test--offering (answer builds &rest body)
+  "Run BODY with Emacs's parser offer answered ANSWER and the build doing BUILDS.
+ASKED counts the offers made.  The stand-in asks its question the way
+Emacs does, through `y-or-n-p', and installs only after a yes; BUILDS is
+what the installation returns, or `error' to make it signal."
+  (declare (indent 2))
+  `(let ((treesit-auto-install-grammar 'ask) (noninteractive nil) (asked 0))
+     (cl-letf (((symbol-function 'y-or-n-p)
+                (lambda (&rest _) (setq asked (1+ asked)) ,answer))
+               ((symbol-function 'treesit-ensure-installed)
+                (lambda (&rest _)
+                  (and (y-or-n-p "Tree-sitter grammar is missing; install it?")
+                       (if (eq ,builds 'error) (error "No compiler") ,builds)))))
+       ,@body)))
+
 (ert-deftest mega-lang-a-declined-parser-is-remembered-and-not-offered-again ()
   (mega-lang-test--with-parsers nil
-    (let ((treesit-auto-install-grammar 'ask) (noninteractive nil) (asked 0))
-      (cl-letf (((symbol-function 'treesit-ensure-installed)
-                 (lambda (&rest _) (setq asked (1+ asked)) nil)))
+    (mega-lang-test--offering nil nil
+      (should-not (mega-lang-parser-p 'rust))
+      (should-not (mega-lang-parser-p 'rust))
+      (should (= asked 1))
+      ;; Remembered across sessions, too.
+      (setq mega-lang--declined 'unread)
+      (should-not (mega-lang-parser-p 'rust))
+      (should (= asked 1))
+      ;; Until the user says to ask again.
+      (mega-lang-ask-again)
+      (should-not (mega-lang-parser-p 'rust))
+      (should (= asked 2)))))
+
+(ert-deftest mega-lang-a-parser-that-failed-to-build-is-offered-again ()
+  "Saying yes with no network or no compiler is not saying no."
+  (mega-lang-test--with-parsers nil
+    (dolist (outcome '(nil error))
+      (mega-lang-test--offering t outcome
         (should-not (mega-lang-parser-p 'rust))
+        (should-not (memq 'rust (mega-lang--declined)))
+        ;; The offer comes again the next time such a file is opened.
         (should-not (mega-lang-parser-p 'rust))
-        (should (= asked 1))
-        ;; Remembered across sessions, too.
-        (setq mega-lang--declined 'unread)
-        (should-not (mega-lang-parser-p 'rust))
-        (should (= asked 1))
-        ;; Until the user says to ask again.
-        (mega-lang-ask-again)
-        (should-not (mega-lang-parser-p 'rust))
-        (should (= asked 2))))))
+        (should (= asked 2))))
+    ;; And whatever happened, the question function is Emacs's own again.
+    (should (eq (symbol-function 'y-or-n-p)
+                (default-toplevel-value 'mega-lang-test--y-or-n-p)))))
 
 (ert-deftest mega-lang-an-accepted-parser-is-used ()
   (mega-lang-test--with-parsers nil
-    (let ((treesit-auto-install-grammar 'ask) (noninteractive nil))
-      (cl-letf (((symbol-function 'treesit-ensure-installed) (lambda (&rest _) t)))
-        (should (mega-lang-parser-p 'rust))
-        (should-not (memq 'rust (mega-lang--declined)))))))
+    (mega-lang-test--offering t t
+      (should (mega-lang-parser-p 'rust))
+      (should (= asked 1))
+      (should-not (memq 'rust (mega-lang--declined))))))
 
 (ert-deftest mega-lang-with-the-prompt-switched-off-nothing-is-asked ()
   (mega-lang-test--with-parsers nil
@@ -176,25 +303,37 @@ Nothing is ever offered for installation, and no decision is recorded."
           (setq buffer-file-name nil))))))
 
 (ert-deftest mega-lang-a-server-starts-only-in-a-trusted-project ()
-  "A language server runs the project's build scripts.  Untrusted, or not
-yet decided in a session where nobody can be asked: no server."
-  (let (started asked)
+  "A language server runs the project's build scripts.  Not trusted: no
+server, and no question either, because opening a file is not one."
+  (let ((started nil) (asked 'not-called) (said nil)
+        (mega-lang--told nil))
     (cl-letf (((symbol-function 'eglot-ensure) (lambda () (setq started t)))
-              ((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
+              ((symbol-function 'mega-exec-find) (lambda (&rest _) t))
+              ((symbol-function 'message)
+               (lambda (format &rest arguments)
+                 (setq said (and format (apply #'format-message format arguments))))))
       (with-temp-buffer
         (setq buffer-file-name "/nonexistent-dir/main.rs"
               major-mode 'mega-rust-mode)
         (unwind-protect
             (progn
               (cl-letf (((symbol-function 'mega-trust-p)
-                         (lambda (_dir ask &rest _) (setq asked ask) nil)))
+                         (lambda (_dir &optional ask &rest _) (setq asked ask) nil)))
                 (mega-lang-start-server)
                 (should-not started)
-                ;; It did ask: this is the moment the user is consulted.
-                (should asked)
-                (should-error (mega-lang--contact) :type 'user-error))
-              ;; With no stub at all, in this batch Emacs, nobody is asked
-              ;; and an undecided project counts as untrusted.
+                ;; It did not ask, and said how to let the server run.
+                (should-not asked)
+                (should (string-match-p "C-c y" said))
+                ;; Once per project, not once per file.
+                (setq said nil)
+                (mega-lang-start-server)
+                (should-not said)
+                ;; `M-x eglot' is a command you gave: that may ask.
+                (cl-letf (((symbol-function 'mega-trust-p)
+                           (lambda (_dir &optional ask &rest _) (setq asked ask) nil)))
+                  (should-error (mega-lang--contact) :type 'user-error)
+                  (should asked)))
+              ;; With no stub at all an undecided project counts as untrusted.
               (let ((mega-trust--decisions nil))
                 (mega-lang-start-server)
                 (should-not started)))
@@ -263,14 +402,49 @@ yet decided in a session where nobody can be asked: no server."
                          :enabled)
               :json-false)))
 
+(ert-deftest mega-lsp-a-project-cannot-switch-telemetry-back-on ()
+  "A project may configure its server; MEGA's privacy settings stay on top."
+  (with-temp-buffer
+    (setq-local eglot-workspace-configuration
+                '(:rust-analyzer (:check (:command "clippy"))
+                  :telemetry (:enableTelemetry t :level "all")
+                  :redhat (:telemetry (:enabled t))))
+    (run-hooks 'hack-local-variables-hook)
+    (let ((now eglot-workspace-configuration))
+      ;; What the project asked for and MEGA has no view on is kept...
+      (should (equal (plist-get (plist-get (plist-get now :rust-analyzer) :check) :command)
+                     "clippy"))
+      (should (equal (plist-get (plist-get now :telemetry) :level) "all"))
+      ;; ...and the switches MEGA sets are as MEGA sets them.
+      (should (eq (plist-get (plist-get now :telemetry) :enableTelemetry) :json-false))
+      (should (eq (plist-get (plist-get (plist-get now :redhat) :telemetry) :enabled)
+                  :json-false))))
+  ;; The older way of writing it, and a function, are covered too.
+  (with-temp-buffer
+    (setq-local eglot-workspace-configuration
+                '((telemetry . (:enableTelemetry t)) (:gopls . (:staticcheck t))))
+    (run-hooks 'hack-local-variables-hook)
+    (should (eq (plist-get (plist-get eglot-workspace-configuration :telemetry)
+                           :enableTelemetry)
+                :json-false))
+    (should (plist-get (plist-get eglot-workspace-configuration :gopls) :staticcheck)))
+  (with-temp-buffer
+    (setq-local eglot-workspace-configuration
+                (lambda (_server) '(:telemetry (:enableTelemetry t))))
+    (run-hooks 'hack-local-variables-hook)
+    (should (eq (plist-get (plist-get (funcall eglot-workspace-configuration nil)
+                                      :telemetry)
+                           :enableTelemetry)
+                :json-false)))
+  ;; A buffer whose project says nothing keeps the default, untouched.
+  (with-temp-buffer
+    (run-hooks 'hack-local-variables-hook)
+    (should-not (local-variable-p 'eglot-workspace-configuration))))
+
 (ert-deftest mega-lsp-never-blocks-on-a-server-and-leaves-none-behind ()
   (should-not eglot-sync-connect)
   (should eglot-autoshutdown))
 
-(ert-deftest mega-lsp-diagnostics-are-on-in-code ()
-  (with-temp-buffer
-    (prog-mode)
-    (should flymake-mode)))
 
 (ert-deftest mega-lsp-documentation-is-wrapped-cut-and-unfenced ()
   (should (equal (mega-doc-lines "fn main()\n\n```rust\nlet x = 1;\n```\nThe end" 40 10)

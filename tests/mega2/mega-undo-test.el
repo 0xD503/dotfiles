@@ -213,6 +213,39 @@ in a row; a function is called."
       (should (equal (buffer-string) "abc"))
       (should (eq (mega-undo-tree--strip buffer-undo-list) before)))))
 
+(ert-deftest mega-undo-tree-never-discards-history-on-the-list-s-word-alone ()
+  "Cutting the list back is the one step that cannot be undone.  A claim
+that two states are equal, were it ever false, must not make it happen."
+  (mega-undo-test--with-history '("a" "b" "c" "d")
+    (let* ((states (mega-undo-states buffer-undo-list))
+           (fourth (aref states 4)))
+      ;; A false claim, of the kind a misbehaving change hook could cause:
+      ;; "abcd" is said to be the same text as "ab".
+      (puthash fourth (aref states 2) undo-equiv-table)
+      (let ((tree (mega-undo-test--tree)))
+        (should (= (plist-get tree :count) 4))
+        (should (= (mega-undo-tree-current tree) 2))
+        ;; Go to "abc".  By the list's word the text would then be in state
+        ;; 3, and everything after it could be dropped: "abcd" would be gone.
+        (mega-undo-test--go 3)
+        (should (equal (buffer-string) "abc"))
+        (should (memq (car fourth) buffer-undo-list))
+        ;; And so plain undo can still take the text back there.
+        (let ((inhibit-message t) (last-command nil))
+          (undo 1))
+        (should (equal (buffer-string) "abcd"))))))
+
+(ert-deftest mega-undo-tree-does-not-cut-back-when-the-text-cannot-be-compared ()
+  (mega-undo-test--with-history '("a" "b" "c")
+    (let ((mega-undo-max-file-size 0)
+          (before (mega-undo-tree--strip buffer-undo-list)))
+      (mega-undo-test--go 1)
+      (mega-undo-test--go 3)
+      (should (equal (buffer-string) "abc"))
+      ;; Longer than it was, and nothing lost: the safe side.
+      (should-not (eq (mega-undo-tree--strip buffer-undo-list) before))
+      (should (memq (car before) buffer-undo-list)))))
+
 (ert-deftest mega-undo-tree-reaches-the-oldest-state-and-comes-back ()
   (mega-undo-test--with-history '("a" "b")
     (mega-undo-test--go 0)
@@ -420,8 +453,9 @@ way out would be one more change than they wrote down."
 
 (ert-deftest mega-undo-no-history-is-kept-for-private-or-excluded-files ()
   (mega-test-with-directory directory
-    (let ((mega-undo-exclude-regexps '("COMMIT_EDITMSG\\'")))
-      (dolist (name '(".env" "id_ed25519" "secrets.yaml" "COMMIT_EDITMSG"))
+    (let ((mega-undo-exclude-regexps '("\\.generated\\'")))
+      (dolist (name '(".env" "id_ed25519" "secrets.yaml" "COMMIT_EDITMSG"
+                      "parser.generated"))
         (let ((file (expand-file-name name directory)))
           (mega-test-visiting buffer file
             (insert "token = hunter2\n")
@@ -434,8 +468,9 @@ way out would be one more change than they wrote down."
           (insert "hello\n")
           (mega-undo-test--save))
         (should (file-exists-p (mega-undo--file file)))))
-    ;; And the default list leaves temporary files out.
-    (let ((buffer-file-name "/tmp/scratch.txt"))
+    ;; And as shipped, temporary files are left out.
+    (let ((buffer-file-name "/tmp/scratch.txt")
+          (mega-temporary-directories mega-test-temporary-directories))
       (should-not (mega-undo--wanted-p)))))
 
 (ert-deftest mega-undo-switching-it-off-keeps-nothing ()
@@ -491,6 +526,8 @@ way out would be one more change than they wrote down."
                  ((nil (2 . 1)))                           ; ends before it starts
                  ((nil (0 . 1)))
                  ((nil ("x" . 0)))
+                 ((nil (#("zz" 0 2 (display (when (danger) . "x"))) . 1)))
+                 ((nil (#("zz" 0 1 (modification-hooks (danger))) . 1)))
                  ((nil ("x" . 1) . 5))                     ; not a proper list
                  ((0 (1 . 2)))                             ; "same as itself"
                  ((x (1 . 2)))
@@ -518,6 +555,25 @@ way out would be one more change than they wrote down."
       (mega-test-write stored "((((")
       ;; ERT turns errors into failures before anything can catch them;
       ;; outside a test a failure to restore is a line in *Messages*.
+      (let ((inhibit-message t) (debug-on-error nil))
+        (mega-test-visiting buffer file
+          (should-not buffer-undo-list))))))
+
+(ert-deftest mega-undo-a-stored-history-is-read-without-shared-structure ()
+  "Nothing MEGA writes refers back to itself; a file that does is not MEGA's."
+  (mega-undo-test--with-file file
+    (mega-test-visiting buffer file
+      (insert "hello\n")
+      (mega-undo-test--save))
+    (let ((stored (mega-undo--file file)))
+      (with-temp-buffer
+        (insert-file-contents stored)
+        (goto-char (point-min))
+        (forward-line 2)
+        (delete-region (point) (point-max))
+        ;; A list that contains itself.
+        (insert "(#1=(nil (1 . 2) . #1#))\n")
+        (write-region nil nil stored nil :silent))
       (let ((inhibit-message t) (debug-on-error nil))
         (mega-test-visiting buffer file
           (should-not buffer-undo-list))))))

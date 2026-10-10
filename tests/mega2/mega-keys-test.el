@@ -165,6 +165,146 @@ inside belongs to whoever owns that keymap."
       (unless (memq feature before)
         (should (memq feature '(mega-help)))))))
 
+;;;; Keys of your own
+
+(defmacro mega-keys-test--scratch (&rest body)
+  "Run BODY on a copy of the table and of the keymap."
+  (declare (indent 0))
+  `(let ((mega-keys (copy-tree mega-keys))
+         (mega-keys-mode-map (copy-keymap mega-keys-mode-map)))
+     ,@body))
+
+(ert-deftest mega-keys-a-row-of-your-own-is-bound-and-shown ()
+  (mega-keys-test--scratch
+    (mega-keys-add "Mine" '("C-c m" forward-word "Go on a word")
+                   '(nil backward-word "Go back a word"))
+    (should (eq (lookup-key mega-keys-mode-map (kbd "C-c m")) #'forward-word))
+    (should (equal (car (last mega-keys))
+                   '("Mine" ("C-c m" forward-word "Go on a word")
+                     (nil backward-word "Go back a word"))))
+    ;; An existing group grows; no second one of the same name appears.
+    (mega-keys-add "Edit" '("C-c e" ignore "Do nothing" :code))
+    (should (= 1 (seq-count (lambda (group) (equal (car group) "Edit")) mega-keys)))
+    (should (member '("C-c e" ignore "Do nothing" :code) (cdr (assoc "Edit" mega-keys))))
+    ;; Limited to code, as asked.
+    (with-temp-buffer
+      (fundamental-mode)
+      (should-not (eq (key-binding (kbd "C-c e")) #'ignore)))
+    (save-window-excursion
+      (mega-help)
+      (let ((sheet (mega-test-buffer-string "*mega-help*")))
+        (should (string-match-p "^Mine$" sheet))
+        (should (string-match-p "^  C-c m +Go on a word$" sheet))
+        (should (string-match-p "^  M-x backward-word +Go back a word$" sheet))))))
+
+(ert-deftest mega-keys-taking-over-a-key-leaves-one-row-for-it ()
+  "The cheat sheet must not go on describing what a key used to do."
+  (mega-keys-test--scratch
+    (should (eq (lookup-key mega-keys-mode-map (kbd "C-c d")) #'mega-doc-buffer))
+    (mega-keys-add "Mine" '("C-c d" forward-word "Mine now"))
+    (should (eq (lookup-key mega-keys-mode-map (kbd "C-c d")) #'forward-word))
+    (should (equal (seq-filter (lambda (row) (equal (car row) "C-c d"))
+                               (mega-keys-test--rows))
+                   '(("C-c d" forward-word "Mine now"))))))
+
+(ert-deftest mega-keys-a-removed-key-is-emacs-s-again ()
+  (mega-keys-test--scratch
+    (should (lookup-key mega-keys-mode-map (kbd "M-{")))
+    (mega-keys-remove "M-{")
+    (should-not (lookup-key mega-keys-mode-map (kbd "M-{")))
+    (should-not (assoc "M-{" (mega-keys-test--rows)))
+    ;; Not hidden behind a binding that says "nothing": what Emacs has shows.
+    (let ((minor-mode-map-alist (list (cons 'mega-keys-mode mega-keys-mode-map))))
+      (should (eq (key-binding (kbd "M-{")) #'backward-paragraph)))))
+
+(ert-deftest mega-keys-a-malformed-row-is-refused-whole ()
+  (mega-keys-test--scratch
+    (let ((before (copy-tree mega-keys)))
+      (should-error (mega-keys-add "Mine" '("C-c m" forward-word "Fine")
+                                   '("C-c n" "not a command" "Broken")))
+      (should-error (mega-keys-add "Mine" '("C-c m" forward-word "Fine" :everywhere)))
+      (should (equal (assoc "Edit" mega-keys) (assoc "Edit" before))))))
+
+(ert-deftest mega-keys-a-removed-feature-takes-its-keys-along ()
+  "Deleting a module's line in init.el must not leave keys that only fail."
+  (mega-keys-test--scratch
+    ;; As after a start with nothing removed: every row is still there.
+    (let ((before (copy-tree mega-keys)))
+      (mega-keys-prune)
+      (should (equal mega-keys before)))
+    (mega-keys-add "Gone" '("C-c z z" mega-keys-test-no-such-command "Does nothing")
+                   '(nil mega-keys-test-no-such-command-either "Nor this"))
+    (mega-keys-add "Edit" '("C-c z e" mega-keys-test-no-such-command "Does nothing"))
+    (should (lookup-key mega-keys-mode-map (kbd "C-c z e")))
+    (mega-keys-prune)
+    (should-not (assoc "Gone" mega-keys))
+    (should-not (assoc "C-c z e" (mega-keys-test--rows)))
+    ;; Not bound at all: a binding to a command that does not exist would
+    ;; hide what Emacs has on the key, and fail when pressed.
+    (should-not (lookup-key mega-keys-mode-map (kbd "C-c z e")))
+    (should-not (lookup-key mega-keys-mode-map (kbd "C-c z z")))
+    ;; What exists is untouched.
+    (should (eq (lookup-key mega-keys-mode-map (kbd "C-c d")) #'mega-doc-buffer))))
+
+;;;; Keys that work in one place only
+
+(defun mega-keys-test--place-keys (row)
+  "Every key ROW of `mega-keys-elsewhere' claims for its command."
+  (append (split-string (car row) ", ") (nth 3 row)))
+
+(ert-deftest mega-keys-the-keys-of-each-place-are-what-the-sheet-says ()
+  "Key by key, and in both directions: nothing listed that is not bound,
+nothing bound that is not listed."
+  (dolist (place mega-keys-elsewhere)
+    (pcase-let ((`(,title ,map ,feature . ,rows) place))
+      (should (stringp title))
+      (require feature)
+      (let ((listed nil))
+        (dolist (row rows)
+          (should (stringp (nth 2 row)))
+          (dolist (key (mega-keys-test--place-keys row))
+            (should (equal (list title key (lookup-key (symbol-value map) (kbd key)))
+                           (list title key (nth 1 row))))
+            (push (key-description (kbd key)) listed)))
+        ;; The map's own keys: what it inherits, from `special-mode' say,
+        ;; is Emacs's to describe.
+        (let ((own (copy-keymap (symbol-value map))))
+          (set-keymap-parent own nil)
+          (should (equal (list title (sort (mapcar #'car (mega-keys-test--bound own))
+                                           #'string<))
+                         (list title (sort (delete-dups listed) #'string<)))))))))
+
+(ert-deftest mega-keys-the-cheat-sheet-lists-the-keys-of-each-place ()
+  (save-window-excursion
+    (mega-help)
+    (let ((sheet (mega-test-buffer-string "*mega-help*")))
+      (dolist (place mega-keys-elsewhere)
+        (should (string-match-p (concat "^" (regexp-quote (car place)) "$") sheet))
+        (dolist (row (nthcdr 3 place))
+          (should (string-match-p
+                   (concat "^  " (regexp-quote (car row)) " +"
+                           (regexp-quote (nth 2 row)) "$")
+                   sheet)))))))
+
+(ert-deftest mega-keys-no-keymap-of-mega-s-is-missing-from-the-sheet ()
+  "A module that grows a keymap of its own has to say so here."
+  (let ((described (cons 'mega-keys-mode-map
+                         ;; The prompt's map holds one key, C-o, which leads
+                         ;; to the options map; that one is described.
+                         (cons 'mega-search-map
+                               (mapcar #'cadr mega-keys-elsewhere))))
+        (found nil))
+    (dolist (file (directory-files (expand-file-name "lisp" mega-dir) t "\\.el\\'"))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (while (re-search-forward
+                "^(\\(?:defvar\\|defvar-keymap\\|defconst\\) +\\(mega-[a-z0-9-]+-map\\)\\_>"
+                nil t)
+          (push (intern (match-string 1)) found))))
+    (should (> (length found) 5))
+    (dolist (map found)
+      (should (memq map described)))))
+
 ;;;; The user guide
 
 (ert-deftest mega-keys-every-key-in-the-guide-really-does-something ()

@@ -115,6 +115,39 @@
       ;; Never send the real address as an anonymous FTP password.
       ange-ftp-generate-anonymous-password nil)
 
+;; Git can be configured to run a program, and a repository can carry
+;; configuration that git picks up by itself: a directory inside a clone
+;; that looks like a bare repository, with a `config' of its own.  Emacs
+;; runs git when you merely open a file, to show the branch.  Two settings
+;; close that door for every git Emacs starts, and both outrank anything a
+;; repository says: a bare repository is used only when named, and no
+;; file-system monitor is run.  The price is that a monitor you configured
+;; yourself is not used from inside Emacs.
+;;
+;; This narrows what a hostile checkout can do; it does not make a `.git'
+;; directory you did not create safe to work in.  Nothing can.
+
+(defcustom mega-git-hardening t
+  "Non-nil to make every git started from Emacs ignore two risky settings.
+See the comment above this option in mega-core.el.  Set it in local.el;
+it is read once, when MEGA starts."
+  :type 'boolean
+  :group 'mega)
+
+(defun mega-core-harden-git ()
+  "Add MEGA's two overrides to the configuration git takes from the environment.
+Settings that are there already are kept."
+  (let ((count (string-to-number (or (getenv "GIT_CONFIG_COUNT") "0"))))
+    (dolist (setting '(("safe.bareRepository" . "explicit")
+                       ("core.fsmonitor" . "false")))
+      (setenv (format "GIT_CONFIG_KEY_%d" count) (car setting))
+      (setenv (format "GIT_CONFIG_VALUE_%d" count) (cdr setting))
+      (setq count (1+ count)))
+    (setenv "GIT_CONFIG_COUNT" (number-to-string count))))
+
+(when mega-git-hardening
+  (mega-core-harden-git))
+
 ;;;; Stability: surviving large and pathological files
 
 (setq large-file-warning-threshold (* 64 1024 1024)

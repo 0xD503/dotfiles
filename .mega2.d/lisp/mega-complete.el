@@ -119,7 +119,10 @@ there are none, or when the computation was interrupted by a keystroke."
 
 (defun mega-complete--capf ()
   "Ask the buffer's completion functions about point.
-Returns (START END TABLE . PROPERTIES) from the first that answers."
+Returns (START END TABLE . PROPERTIES) from the first that answers.  One
+that says it need not be the only source (`:exclusive no\=') is passed
+over when it has nothing for what is typed, so that the next is asked,
+as Emacs's own completion does."
   (run-hook-wrapped
    'completion-at-point-functions
    (lambda (function)
@@ -127,6 +130,12 @@ Returns (START END TABLE . PROPERTIES) from the first that answers."
        (and (consp result)
             (integer-or-marker-p (car result))
             (integer-or-marker-p (cadr result))
+            (or (not (eq (plist-get (nthcdr 3 result) :exclusive) 'no))
+                (ignore-errors
+                  (try-completion (buffer-substring-no-properties (car result)
+                                                                  (cadr result))
+                                  (nth 2 result)
+                                  (plist-get (nthcdr 3 result) :predicate))))
             result)))))
 
 ;;;; Drawing
@@ -271,27 +280,38 @@ chosen at first."
                                   (cons table predicate) -1))))))))
 
 (defun mega-complete--post-command ()
-  "Keep the menu in step with what the last command did."
-  (cond
-   (mega-complete--active
-    (cond ((memq this-command '(mega-complete-next mega-complete-previous)))
-          ((and (eq (current-buffer) mega-complete--buffer)
-                (memq this-command mega-complete--typing-commands)
-                (>= (point) (marker-position mega-complete--start)))
-           (mega-complete--refresh))
-          (t (mega-complete-close))))
-   ((and (eq this-command 'self-insert-command)
-         (not (minibufferp))
-         (not buffer-read-only))
-    (when mega-complete--timer
-      (cancel-timer mega-complete--timer))
-    (let ((buffer (current-buffer)) (point (point)))
-      (setq mega-complete--timer
-            (run-with-idle-timer
-             mega-complete-delay nil
-             (lambda ()
-               (when (and (eq (current-buffer) buffer) (= (point) point))
-                 (mega-complete--auto)))))))))
+  "Keep the menu in step with what the last command did.
+Whatever goes wrong in here closes the menu and is said once: Emacs
+drops a function from this hook the first time it signals, and a menu
+left open by that would keep the keys it borrowed."
+  (condition-case err
+      (cond
+       (mega-complete--active
+        (cond ((memq this-command '(mega-complete-next mega-complete-previous)))
+              ((and (eq (current-buffer) mega-complete--buffer)
+                    (memq this-command mega-complete--typing-commands)
+                    (>= (point) (marker-position mega-complete--start)))
+               (mega-complete--refresh))
+              (t (mega-complete-close))))
+       ((and (eq this-command 'self-insert-command)
+             (not (minibufferp))
+             (not buffer-read-only))
+        (when mega-complete--timer
+          (cancel-timer mega-complete--timer))
+        (let ((buffer (current-buffer)) (point (point)))
+          (setq mega-complete--timer
+                (run-with-idle-timer
+                 mega-complete-delay nil
+                 (lambda ()
+                   (when (and (eq (current-buffer) buffer) (= (point) point))
+                     (condition-case err
+                         (mega-complete--auto)
+                       (error (ignore-errors (mega-complete-close))
+                              (message "Completion: %s"
+                                       (error-message-string err))))))))))
+       )
+    (error (ignore-errors (mega-complete-close))
+           (message "Completion: %s" (error-message-string err)))))
 
 ;;;; Completion on request
 

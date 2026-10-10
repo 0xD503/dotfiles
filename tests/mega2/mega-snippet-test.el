@@ -161,7 +161,9 @@
 
 (ert-deftest mega-snippet-every-shipped-template-parses-and-has-a-name ()
   (dolist (entry mega-snippets)
-    (should (seq-every-p #'symbolp (car entry)))
+    ;; Where it applies: a language of the table, or a major mode.
+    (dolist (where (car entry))
+      (should (or (assq where mega-languages) (fboundp where))))
     (dolist (snippet (cdr entry))
       (should (string-match-p "\\`[a-z]+\\'" (car snippet)))
       (should (stringp (car (mega-snippet-parse (cdr snippet))))))))
@@ -233,6 +235,20 @@
        (cl-letf (((symbol-function 'mega-trust-p) (lambda (&rest _) t))
                  ((symbol-function 'mega-project-root) (lambda (&rest _) dir)))
          ,@body))))
+
+(ert-deftest mega-snippet-both-modes-of-a-language-get-its-snippets ()
+  "They are listed by language: the plain mode and the tree-sitter one alike."
+  (dolist (mode '(c-mode c++-mode mega-rust-mode sh-mode python-mode))
+    (with-temp-buffer
+      (let ((inhibit-message t)) (funcall mode))
+      (should (assoc "todo" (mega-snippet-available)))
+      (should (equal (cons mode (and (assoc "for" (mega-snippet-available)) t))
+                     (cons mode (not (eq mode 'python-mode)))))))
+  ;; Asked by name, since a tree-sitter mode needs its parser to be entered.
+  (cl-letf (((symbol-function 'mega-lang-name) (lambda (&rest _) 'rust)))
+    (with-temp-buffer
+      (should (assoc "impl" (mega-snippet-available)))
+      (should-not (assoc "todo" (mega-snippet-available))))))
 
 (ert-deftest mega-task-a-cargo-project-has-the-cargo-tasks ()
   (mega-snippet-test--project '("Cargo.toml")

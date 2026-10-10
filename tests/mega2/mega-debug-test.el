@@ -12,8 +12,10 @@
 (require 'mega-test-helper)
 (require 'mega-trust)
 (require 'mega-debug)
+(require 'mega-dap)
 
 (defvar gud-comint-buffer)
+(defvar gud-minor-mode)
 (defvar gud-last-frame)
 (defvar gud-last-last-frame)
 (defvar gdb-debuginfod-enable-setting)
@@ -40,8 +42,14 @@
   (lambda (directory)
     (when (file-in-directory-p directory dir)
       (list :kind 'container :name "box"
+            ;; As a context must: what is asked for through
+            ;; `mega-exec-environment' goes to the program inside.
             :wrap (lambda (program args _where)
-                    (append (list "podman" "exec" "cid") (cons program args)))
+                    (append (list "podman" "exec")
+                            (mapcan (lambda (setting) (list "--env" setting))
+                                    mega-exec-environment)
+                            (list "cid")
+                            (cons program args)))
             :find (lambda (program) (member program '("gdb" "python3")))
             :to-inside (lambda (file)
                          (concat "/workspaces/p/" (file-relative-name file dir)))
@@ -61,7 +69,15 @@
       (should (eq (mega-debug-language dir) 'rust))
       ;; The file you are in says more than the project around it.
       (let ((inhibit-message t)) (python-mode))
-      (should (eq (mega-debug-language dir) 'python)))))
+      (should (eq (mega-debug-language dir) 'python)))
+    ;; And says enough by itself: a Rust file with no manifest in sight.
+    (mega-test-with-directory bare
+      (with-temp-buffer
+        (let ((inhibit-message t)) (mega-rust-mode))
+        (should (eq (mega-debug-language bare) 'rust)))
+      (with-temp-buffer
+        (let ((inhibit-message t)) (c-mode))
+        (should (eq (mega-debug-language bare) 'native))))))
 
 (ert-deftest mega-debug-chooses-the-preferred-debugger-that-exists ()
   ;; lldb before gdb, where both are there.
@@ -297,11 +313,14 @@ STARTED becomes (FUNCTION COMMAND-LINE DIRECTORY) when one is called."
       (unwind-protect
           (cl-letf (((symbol-function 'gud-run) (lambda (_) (push 'run calls)))
                     ((symbol-function 'gud-cont) (lambda (_) (push 'continue calls))))
+            (setq-local gud-minor-mode 'gdbmi)
             (mega-debug-run)
             (should (equal calls '(run)))
             ;; pdb has no "run": its program is already waiting on line one.
-            (cl-letf (((symbol-function 'gud-run) nil))
-              (mega-debug-run))
+            ;; Emacs still has gdb's `run' from the session before; what
+            ;; counts is the debugger that is running now.
+            (setq-local gud-minor-mode 'pdb)
+            (mega-debug-run)
             (should (equal calls '(continue run))))
         (delete-process process)))))
 
@@ -314,9 +333,71 @@ STARTED becomes (FUNCTION COMMAND-LINE DIRECTORY) when one is called."
 
 ;;;; Privacy
 
-(ert-deftest mega-debug-gdb-fetches-nothing-from-the-network ()
+(ert-deftest mega-debug-no-debugger-is-started-with-a-server-to-ask ()
+  "Not a variable of one front end: what the debugger itself is given.
+Every start is checked, on this machine and in a container."
+  (mega-debug-test--with-tools '("gdb" "lldb")
+    (let ((program (mega-test-write (expand-file-name "build/app" dir) ""))
+          (default-directory dir)
+          (process-environment (cons "DEBUGINFOD_URLS=https://debuginfod.example/"
+                                     process-environment))
+          (seen nil))
+      (cl-letf (((symbol-function 'read-file-name) (lambda (&rest _) program))
+                ((symbol-function 'lldb)
+                 (lambda (_line) (setq seen (getenv "DEBUGINFOD_URLS"))))
+                ((symbol-function 'gdb)
+                 (lambda (_line) (setq seen (getenv "DEBUGINFOD_URLS")))))
+        ;; lldb, the default, through Emacs's own interface.
+        (with-temp-buffer (mega-debug))
+        (should (equal seen ""))
+        ;; gdb likewise.
+        (let ((mega-debug-prefer '(gdb lldb)))
+          (setq seen nil)
+          (with-temp-buffer (mega-debug))
+          (should (equal seen "")))
+        ;; Unless you ask for it.
+        (let ((mega-debug-debuginfod t))
+          (with-temp-buffer (mega-debug))
+          (should (equal seen "https://debuginfod.example/")))
+        ;; In a container the setting travels on the command line.
+        (let ((mega-exec-context-functions (list (mega-debug-test--container dir)))
+              (line nil))
+          (cl-letf (((symbol-function 'gud-gdb) (lambda (command) (setq line command)))
+                    ((symbol-function 'lldb) (lambda (command) (setq line command))))
+            (let ((mega-debug-backend 'gud))
+              (with-temp-buffer (mega-debug))))
+          (should (string-match-p "DEBUGINFOD_URLS=" line))))))
+  ;; Emacs's own gdb interface is told not to ask either.
   (require 'gdb-mi)
   (should-not gdb-debuginfod-enable-setting))
+
+(ert-deftest mega-debug-nothing-is-found-out-about-an-untrusted-project ()
+  "Finding the debugger can mean running one, and the project may say
+which program that name stands for.  Trust is asked about first."
+  (mega-debug-test--with-tools '("gdb")
+    (let ((program (mega-test-write (expand-file-name "build/app" dir) ""))
+          (file (mega-test-write (expand-file-name "main.c" dir) "int x;" ""))
+          (ran nil)
+          (mega-debug-backend 'dap))
+      (setq mega-trust--decisions nil)
+      (delete-file mega-trust-file)
+      (cl-letf (((symbol-function 'read-file-name) (lambda (&rest _) program))
+                ((symbol-function 'mega-exec-run)
+                 (lambda (name &rest _) (push name ran) '(:status 0 :output "16.3\n")))
+                ((symbol-function 'mega-dap-start) (lambda (&rest _) (push 'started ran))))
+        (mega-test-visiting buffer file
+          ;; The breakpoint key, which never asks.
+          (should-error (mega-debug-break) :type 'user-error)
+          (should-not ran)
+          ;; Starting, which would ask; here nobody can be asked.
+          (should-error (mega-debug) :type 'user-error)
+          (should-not ran)
+          ;; Trusted, both go ahead.
+          (mega-trust-project)
+          (mega-debug-break)
+          (should (member "gdb" ran))
+          (should (equal (mega-dap-lines file) '(1)))
+          (mega-debug-break))))))
 
 ;;;; A real session
 

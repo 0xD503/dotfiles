@@ -25,16 +25,32 @@
 ;;
 ;; That is what keeps `M-n' meaning "next in history" at a prompt and "next
 ;; error" in a compilation buffer.
+;;
+;; Keys of your own go in the same table, so that the cheat sheet shows them.
+;; In local.el, which loads before this file:
+;;
+;;   (with-eval-after-load 'mega-keys
+;;     (mega-keys-add "Mine"
+;;                    '("C-c m" my-command "What it does")
+;;                    '("C-c d" my-doc     "Replaces MEGA's C-c d"))
+;;     (mega-keys-remove "C-c D"))
+;;
+;; Some keys mean something only in one place: inside the completion menu,
+;; in the undo tree, on the home page.  Those live in the keymaps of the
+;; modules they belong to and are described in `mega-keys-elsewhere', which
+;; the cheat sheet prints after the table.  A test holds that description to
+;; the keymaps, key by key and in both directions.
 
 ;;; Code:
 
 (require 'mega-lib)
 
-(defconst mega-keys
+(defvar mega-keys
   '(("Help"
      ("C-c ?" mega-help   "This cheat sheet")
      ("C-c h" mega-home   "The home page: continue, recent projects")
-     (nil     mega-doctor "What works on this machine, and what is missing"))
+     (nil     mega-doctor "What works on this machine, and what is missing")
+     ("C-c y" mega-trust-project "Trust this project: let its server, checks, formatter and tasks run"))
     ("Find"
      ("M-g a" mega-search-project "Search the project as you type")
      ("M-g s" mega-search-symbol  "Search the project for the symbol at point")
@@ -101,7 +117,7 @@
      ("C-c k x" mega-container-stop    "Stop the container")
      ("C-c k r" mega-container-rebuild "Remove the container and start a new one"))
     ("Workspaces"
-     ("C-c w s" mega-workspace-save   "Save the files and windows on screen under a name")
+     ("C-c w s" mega-workspace-save   "Save the open files and the window layout under a name")
      ("C-c w r" mega-workspace-resume "Bring a saved workspace back")
      ("C-c w n" mega-workspace-new    "Open an empty tab")
      ("C-c w w" tab-bar-switch-to-tab "Switch to another tab")
@@ -110,7 +126,75 @@
      ("M-{" shrink-window-horizontally  "Make the window narrower")
      ("M-}" enlarge-window-horizontally "Make the window wider")))
   "Every binding MEGA defines, grouped for the cheat sheet.
-Each element is (GROUP ROW...); see the Commentary for a ROW.")
+Each element is (GROUP ROW...); see the Commentary for a ROW.
+Change it with `mega-keys-add' and `mega-keys-remove', which keep the
+keymap in step.")
+
+(defconst mega-keys-elsewhere
+  '(("In the completion menu" mega-complete-menu-map mega-complete
+     ("C-n, <down>" mega-complete-next     "Choose the next candidate")
+     ("C-p, <up>"   mega-complete-previous "Choose the previous candidate")
+     ("TAB"         mega-complete-accept   "Take the chosen candidate, or the first" ("<tab>"))
+     ("RET"         mega-complete-return   "Take the chosen candidate; with none chosen, a new line"
+      ("<return>"))
+     ("C-g"         mega-complete-close    "Close the menu"))
+    ("While a snippet is being filled in" mega-snippet-map mega-snippet
+     ("TAB"       mega-snippet-next     "Go to the next place; after the last one, finish" ("<tab>"))
+     ("<backtab>" mega-snippet-previous "Go back to the previous place" ("S-TAB"))
+     ("C-g"       mega-snippet-finish   "Stop filling it in"))
+    ("In the search prompt, after C-o" mega-search-options-map mega-search
+     ("c" mega-search-cycle-case       "Case: smart, ignore, sensitive")
+     ("u" mega-search-toggle-untracked "Files git does not track: in or out")
+     ("i" mega-search-toggle-ignored   "Ignored files: in or out")
+     ("h" mega-search-toggle-hidden    "Hidden files: in or out")
+     ("l" mega-search-toggle-literal   "Take the pattern literally, or as a regexp")
+     ("w" mega-search-toggle-word      "Whole words only, or anywhere")
+     ("b" mega-search-cycle-backend    "Search with the next usable program")
+     ("e" mega-search-export           "Leave the prompt and put every hit in a buffer")
+     ("?" mega-search-show-settings    "Show how the search currently works"))
+    ("In the undo tree" mega-undo-tree-mode-map mega-undo-tree
+     ("b, <left>, C-b"  mega-undo-tree-backward        "The older state this one was made from")
+     ("f, <right>, C-f" mega-undo-tree-forward         "The newer state made from this one")
+     ("n, <down>, C-n"  mega-undo-tree-next-branch     "The next branch of this fork")
+     ("p, <up>, C-p"    mega-undo-tree-previous-branch "The previous branch of this fork")
+     ("a, C-a"          mega-undo-tree-branch-start    "Back to where this branch forks off")
+     ("e, C-e"          mega-undo-tree-branch-end      "The end of this branch")
+     ("RET, q"          mega-undo-tree-quit            "Close the tree and keep the text as it is now")
+     ("C-g"             mega-undo-tree-cancel          "Close the tree and put the text back"))
+    ("After a stepping key of the debugger" mega-debug-repeat-map mega-debug
+     ("n" mega-debug-next     "Step over again")
+     ("s" mega-debug-step     "Step into again")
+     ("f" mega-debug-finish   "Run until this function returns")
+     ("u" mega-debug-until    "Run until a later line")
+     ("c" mega-debug-continue "Continue")
+     ("<" mega-debug-up       "Up one frame")
+     (">" mega-debug-down     "Down one frame"))
+    ("On the home page" mega-home-mode-map mega-home
+     ("RET" mega-home-act          "Do what the line under the cursor offers")
+     ("r"   mega-home-continue     "Continue from the session that was closed last")
+     ("1"   mega-home-open-nth     "Open that recent project; so 2 to 9"
+      ("2" "3" "4" "5" "6" "7" "8" "9"))
+     ("f"   find-file              "Open a file")
+     ("p"   project-switch-project "Switch to a project")
+     ("w"   mega-workspace-resume  "Bring a saved workspace back")
+     ("?"   mega-help              "This cheat sheet")
+     ("d"   mega-doctor            "What works on this machine")
+     ("g"   mega-home              "Draw the page again")
+     ("q"   mega-home-leave        "Leave the home page"))
+    ("In the buffer with Claude's answer" mega-claude-answer-mode-map mega-llm
+     ("RET, C-c C-c" mega-claude-apply "Apply the rewrite, if the text is still what was sent"))
+    ("In a Markdown file" mega-markdown-mode-map mega-mode-markdown
+     ("TAB"       mega-markdown-tab    "Fold or unfold on a heading; indent anywhere else")
+     ("<backtab>" outline-cycle-buffer "Fold or unfold the whole file")
+     ("C-c C-n"   outline-next-visible-heading     "The next heading")
+     ("C-c C-p"   outline-previous-visible-heading "The previous heading")))
+  "The keys that mean something in one place only.
+Each element is (PLACE MAP FEATURE ROW...): the keys of keymap MAP,
+which module FEATURE defines.  A ROW is (KEYS COMMAND DESCRIPTION
+[ALSO]): KEYS, in `kbd' notation and separated by a comma and a space,
+is what the cheat sheet shows; ALSO lists further keys for the same
+command that are not worth a reader's time, such as the name a
+graphical frame has for TAB.")
 
 (defun mega-keys--applies-p (where)
   "Non-nil if a key limited to WHERE applies in the current buffer."
@@ -137,6 +221,63 @@ Each element is (GROUP ROW...); see the Commentary for a ROW.")
           (define-key map (kbd (car row)) (mega-keys--binding row)))))
     map)
   "Keymap holding every binding MEGA defines.  Built from `mega-keys'.")
+
+;;;; Changing the table
+
+(defun mega-keys-remove (key)
+  "Take KEY, in `kbd' notation, out of the table and out of the keymap.
+What Emacs had on KEY is in force again."
+  (setq mega-keys
+        (mapcar (lambda (group)
+                  (cons (car group)
+                        (seq-remove (lambda (row) (equal (car row) key))
+                                    (cdr group))))
+                mega-keys))
+  ;; The third argument removes the binding; nil would leave one that says
+  ;; "nothing here", and hide the key of the mode underneath.
+  (define-key mega-keys-mode-map (kbd key) nil t))
+
+(defun mega-keys-prune ()
+  "Take out of the table every key whose command does not exist.
+A feature that was removed, by deleting its line in init.el, must not
+leave keys behind that do nothing but fail.  Called once the modules
+are in; a command that loads its module on first use exists already."
+  (dolist (group mega-keys)
+    (dolist (row (cdr group))
+      (unless (or (fboundp (nth 1 row)) (null (car row)))
+        (mega-keys-remove (car row)))))
+  ;; And the rows that had no key, with the groups this leaves empty.
+  (setq mega-keys
+        (delq nil
+              (mapcar (lambda (group)
+                        (when-let* ((rows (seq-filter (lambda (row) (fboundp (nth 1 row)))
+                                                      (cdr group))))
+                          (cons (car group) rows)))
+                      mega-keys))))
+
+(defun mega-keys-add (group &rest rows)
+  "Add ROWS to GROUP of the table, and their keys to the keymap.
+GROUP is the heading the cheat sheet shows them under; a new name makes
+a new group.  A ROW is (KEY COMMAND DESCRIPTION [WHERE]), as in the
+Commentary.  A key that is in the table already gets its new meaning
+and loses its old row, so the cheat sheet stays true."
+  (dolist (row rows)
+    (unless (and (or (null (car row)) (stringp (car row)))
+                 (symbolp (nth 1 row))
+                 (stringp (nth 2 row))
+                 (memq (nth 3 row) '(nil :code :text)))
+      (error "Not a row of `mega-keys': %S" row))
+    (when (car row)
+      (mega-keys-remove (car row))
+      (define-key mega-keys-mode-map (kbd (car row)) (mega-keys--binding row))))
+  (if (assoc group mega-keys)
+      (setq mega-keys
+            (mapcar (lambda (existing)
+                      (if (equal (car existing) group)
+                          (append existing (copy-sequence rows))
+                        existing))
+                    mega-keys))
+    (setq mega-keys (append mega-keys (list (cons group (copy-sequence rows)))))))
 
 ;;;###autoload
 (define-minor-mode mega-keys-mode

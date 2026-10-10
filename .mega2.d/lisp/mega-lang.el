@@ -3,19 +3,33 @@
 ;;; Commentary:
 
 ;; Every language MEGA knows is one row in `mega-languages'.  Adding one is
-;; adding a row; nothing else in MEGA knows a language name.
+;; adding a row: the modules that format, indent, debug and offer snippets
+;; ask this file what a buffer's language is and read the row.  Nothing else
+;; in MEGA knows which modes make up a language.
 ;;
 ;; A row is (NAME . PLIST):
 ;;
-;;   :ts        the tree-sitter mode, the best there is when its parser is
-;;              installed
-;;   :parser    the parser that mode needs
-;;   :plain     the mode to use without the parser: Emacs's classic mode
-;;              where one exists, a mode of MEGA's own where none does
-;;   :patterns  file name regexps, for files Emacs would not otherwise send
-;;              to one of the modes above
-;;   :servers   language server command lines, best first; the first whose
-;;              program exists is used, and if none does, none is started
+;;   :ts          the tree-sitter mode, the best there is when its parser is
+;;                installed
+;;   :parser      the parser that mode needs
+;;   :plain       the mode to use without the parser: Emacs's classic mode
+;;                where one exists, a mode of MEGA's own where none does
+;;   :patterns    file name regexps, for files Emacs would not otherwise
+;;                send to one of the modes above
+;;   :servers     language server command lines, best first; the first whose
+;;                program exists is used, and if none does, none is started
+;;   :formatters  formatter command lines, best first, chosen the same way:
+;;                programs that read code on standard input and write it
+;;                formatted on standard output (mega-format.el explains the
+;;                symbols that may stand among the arguments)
+;;   :indent      the variable holding the indentation width in the :plain
+;;                mode, for the indentation guides
+;;   :ts-indent   the same for the :ts mode, where that is another variable
+;;   :debug       the kind of debugger its programs need, a key of
+;;                `mega-debug-languages'; without it the project decides
+;;
+;; What belongs to a kind of project, not to a language — its tasks, the
+;; command that formats all of it — is in `mega-project-kinds'.
 ;;
 ;; Tree-sitter parsers are not bundled with Emacs.  The first time you open a
 ;; file whose language has one, Emacs asks whether to fetch and build it;
@@ -33,8 +47,6 @@
 (declare-function treesit-language-available-p "treesit.c")
 (declare-function treesit-ensure-installed "treesit")
 (declare-function eglot-ensure "eglot")
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
 
 (defvar treesit-auto-install-grammar)
 (defvar treesit-extra-load-path)
@@ -43,39 +55,64 @@
 (defvar mega-languages
   '((c          :ts c-ts-mode :parser c :plain c-mode
                 :servers (("clangd" "--background-index" "--clang-tidy"
-                           "--header-insertion=never")))
+                           "--header-insertion=never"))
+                :formatters (("clang-format" assume-filename))
+                :indent c-basic-offset :ts-indent c-ts-mode-indent-offset)
     (cpp        :ts c++-ts-mode :parser cpp :plain c++-mode
                 :servers (("clangd" "--background-index" "--clang-tidy"
-                           "--header-insertion=never")))
+                           "--header-insertion=never"))
+                :formatters (("clang-format" assume-filename))
+                :indent c-basic-offset :ts-indent c-ts-mode-indent-offset)
     (rust       :ts rust-ts-mode :parser rust :plain mega-rust-mode
                 :patterns ("\\.rs\\'")
-                :servers (("rust-analyzer")))
+                :servers (("rust-analyzer"))
+                :formatters (("rustfmt" "--emit" "stdout" edition))
+                :indent mega-simple-indent-offset
+                :ts-indent rust-ts-mode-indent-offset
+                :debug rust)
     (python     :ts python-ts-mode :parser python :plain python-mode
                 :servers (("basedpyright-langserver" "--stdio")
                           ("pyright-langserver" "--stdio")
-                          ("pylsp")))
+                          ("pylsp"))
+                :formatters (("ruff" "format" "--stdin-filename" file "-")
+                             ("black" "--quiet" "-"))
+                :indent python-indent-offset
+                :debug python)
     (shell      :ts bash-ts-mode :parser bash :plain sh-mode
-                :servers (("bash-language-server" "start")))
+                :servers (("bash-language-server" "start"))
+                :formatters (("shfmt" "-"))
+                :indent sh-basic-offset)
     (javascript :ts js-ts-mode :parser javascript :plain js-mode
-                :servers (("typescript-language-server" "--stdio")))
+                :servers (("typescript-language-server" "--stdio"))
+                :indent js-indent-level)
     (typescript :ts typescript-ts-mode :parser typescript :plain js-mode
                 :patterns ("\\.[cm]?ts\\'")
-                :servers (("typescript-language-server" "--stdio")))
+                :servers (("typescript-language-server" "--stdio"))
+                :indent js-indent-level
+                :ts-indent typescript-ts-mode-indent-offset)
     (tsx        :ts tsx-ts-mode :parser tsx :plain js-mode
                 :patterns ("\\.tsx\\'")
-                :servers (("typescript-language-server" "--stdio")))
+                :servers (("typescript-language-server" "--stdio"))
+                :indent js-indent-level
+                :ts-indent typescript-ts-mode-indent-offset)
     (go         :ts go-ts-mode :parser go
                 :patterns ("\\.go\\'")
-                :servers (("gopls")))
+                :servers (("gopls"))
+                :formatters (("gofmt"))
+                :ts-indent go-ts-mode-indent-offset)
     (lua        :ts lua-ts-mode :parser lua :plain lua-mode
-                :servers (("lua-language-server")))
+                :servers (("lua-language-server"))
+                :formatters (("stylua" "-"))
+                :indent lua-indent-level :ts-indent lua-ts-indent-offset)
     (json       :ts json-ts-mode :parser json :plain js-json-mode
-                :servers (("vscode-json-language-server" "--stdio")))
+                :servers (("vscode-json-language-server" "--stdio"))
+                :indent js-indent-level :ts-indent json-ts-mode-indent-offset)
     (yaml       :ts yaml-ts-mode :parser yaml :plain conf-colon-mode
                 :patterns ("\\.ya?ml\\'")
                 :servers (("yaml-language-server" "--stdio")))
     (toml       :ts toml-ts-mode :parser toml :plain conf-toml-mode
-                :servers (("taplo" "lsp" "stdio")))
+                :servers (("taplo" "lsp" "stdio"))
+                :formatters (("taplo" "format" "-")))
     (cmake      :ts cmake-ts-mode :parser cmake
                 :patterns ("\\(?:CMakeLists\\.txt\\|\\.cmake\\)\\'"))
     (dockerfile :ts dockerfile-ts-mode :parser dockerfile
@@ -85,12 +122,50 @@
                 :servers (("marksman" "server")))
     (zig        :plain mega-zig-mode
                 :patterns ("\\.\\(?:zig\\|zon\\)\\'")
-                :servers (("zls")))
+                :servers (("zls"))
+                :formatters (("zig" "fmt" "--stdin"))
+                :indent mega-simple-indent-offset)
     (just       :plain mega-just-mode
-                :patterns ("\\(?:\\`\\|/\\)\\.?[Jj]ustfile\\'" "\\.just\\'"))
+                :patterns ("\\(?:\\`\\|/\\)\\.?[Jj]ustfile\\'" "\\.just\\'")
+                :indent mega-simple-indent-offset)
     (verilog    :plain verilog-mode
-                :servers (("verible-verilog-ls") ("svls") ("veridian"))))
+                :servers (("verible-verilog-ls") ("svls") ("veridian"))
+                :indent verilog-indent-level))
   "Every language MEGA configures.  See the Commentary for the row format.")
+
+;;;; What a buffer's language is
+
+(defun mega-lang--modes (row)
+  "The major modes of ROW."
+  (delq nil (list (plist-get row :ts) (plist-get row :plain))))
+
+(defun mega-lang-of-mode (&optional mode)
+  "The row of `mega-languages' that MODE belongs to, with its name, or nil.
+MODE defaults to the mode of the current buffer.  A mode belongs to the
+first language that lists it; failing that, to the first that lists a
+mode it derives from."
+  (seq-some (lambda (candidate)
+              (seq-find (lambda (spec) (memq candidate (mega-lang--modes (cdr spec))))
+                        mega-languages))
+            (derived-mode-all-parents (or mode major-mode))))
+
+(defun mega-lang-name (&optional mode)
+  "The name of the language MODE belongs to, or nil.  See `mega-lang-of-mode'."
+  (car (mega-lang-of-mode mode)))
+
+(defun mega-lang-get (property &optional mode)
+  "PROPERTY of the row of the language MODE belongs to, or nil."
+  (plist-get (cdr (mega-lang-of-mode mode)) property))
+
+(defun mega-lang-indent-variable (&optional mode)
+  "The variable holding the indentation width of MODE, or nil if unknown."
+  (let* ((mode (or mode major-mode))
+         (row (cdr (mega-lang-of-mode mode)))
+         (ts (plist-get row :ts)))
+    (or (and ts (provided-mode-derived-p mode ts) (plist-get row :ts-indent))
+        (plist-get row :indent)
+        ;; A language that has no mode but the tree-sitter one.
+        (and (not (plist-get row :plain)) (plist-get row :ts-indent)))))
 
 ;;;; Parsers
 
@@ -126,10 +201,28 @@
     (delete-file mega-lang-declined-file))
   (message "Emacs will offer to install missing parsers again"))
 
+(defun mega-lang--offer-parser (parser)
+  "Let Emacs offer to install PARSER.  Return `installed', `declined' or nil.
+Nil means it was not installed although nobody said no: no network, no
+compiler, a build that failed.  Emacs reports all of these the same
+way, so the answer to its question is noted as it goes by."
+  (let* ((ask (symbol-function 'y-or-n-p))
+         (answer 'none)
+         (installed
+          (unwind-protect
+              (progn
+                (fset 'y-or-n-p (lambda (&rest arguments)
+                                  (setq answer (and (apply ask arguments) t))))
+                (ignore-errors (treesit-ensure-installed parser)))
+            (fset 'y-or-n-p ask))))
+    (cond (installed 'installed)
+          ((null answer) 'declined))))
+
 (defun mega-lang-parser-p (parser)
   "Non-nil if PARSER is installed, or the user just agreed to install it.
 When it is missing and has not been declined before, this is where
-Emacs's own prompt appears; a no is remembered."
+Emacs's own prompt appears.  A no is remembered; a failure is not, so
+that the offer comes again once whatever was missing is there."
   (cond ((not (and (fboundp 'treesit-available-p) (treesit-available-p))) nil)
         ((treesit-language-available-p parser) t)
         ((memq parser (mega-lang--declined)) nil)
@@ -139,8 +232,9 @@ Emacs's own prompt appears; a no is remembered."
              (not (require 'treesit nil t))
              (not treesit-auto-install-grammar))
          nil)
-        ((ignore-errors (treesit-ensure-installed parser)) t)
-        (t (mega-lang--decline parser) nil)))
+        (t (pcase (mega-lang--offer-parser parser)
+             ('installed t)
+             ('declined (mega-lang--decline parser) nil)))))
 
 ;; Parsers are built into the data directory: recreating them needs the
 ;; network, so they do not belong in a cache.
@@ -189,10 +283,6 @@ See `mega-languages'." name)))
 
 ;;;; Language servers
 
-(defun mega-lang--modes (row)
-  "The major modes of ROW."
-  (delq nil (list (plist-get row :ts) (plist-get row :plain))))
-
 (defun mega-lang-row-for-mode (mode)
   "The row of `mega-languages' that MODE belongs to, or nil."
   (seq-find (lambda (spec)
@@ -220,18 +310,37 @@ server run inside the project's container."
       (user-error "This project is not trusted; see M-x mega-trust-project"))
     (mega-exec-command (car server) (cdr server) default-directory)))
 
+(defvar mega-lang--told nil
+  "The roots that have been said, this session, to be held back.")
+
 (defun mega-lang-start-server ()
   "Start the language server for this buffer, if one is installed.
 Runs when a file of a known language is opened.  A server builds the
-project to understand it, which runs the project's own code, so the
-project has to be trusted first: this is where MEGA asks, once.  Remote
-files are left alone: `M-x eglot' starts a server there on request."
+project to understand it, which runs the project's own code, so it
+starts only in a project you have trusted.  Nothing is asked here:
+opening a file is not a question.  Remote files are left alone:
+`M-x eglot' starts a server there on request."
   (when (and buffer-file-name
              (not (file-remote-p buffer-file-name)))
     (when-let* ((spec (mega-lang-row-for-mode major-mode))
-                ((mega-lang-server spec))
-                ((mega-trust-p default-directory t "start its language server")))
-      (eglot-ensure))))
+                (server (mega-lang-server spec)))
+      (if (mega-trust-p default-directory)
+          (eglot-ensure)
+        ;; Once per project and session, and only where it changes
+        ;; something: a server is installed and is not being started.
+        (let ((root (mega-trust-root default-directory)))
+          (unless (member root mega-lang--told)
+            (push root mega-lang--told)
+            (message "%s is waiting: C-c y trusts %s"
+                     (car server) root)))))))
+
+(defun mega-lang--trust-changed (root)
+  "Start the servers that were waiting for a decision about ROOT."
+  (dolist (buffer (mega-trust-buffers root))
+    (with-current-buffer buffer
+      (mega-lang-start-server))))
+
+(add-hook 'mega-trust-change-functions #'mega-lang--trust-changed)
 
 (defun mega-lang--register-servers ()
   "Tell eglot which modes MEGA's server table covers."

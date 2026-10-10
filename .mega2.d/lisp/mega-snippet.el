@@ -29,30 +29,33 @@
 ;;; Code:
 
 (require 'mega-lib)
+(require 'mega-lang)
 (require 'cl-lib)
 
 (defvar mega-snippets
   '(((prog-mode)
      ("todo" . "TODO: $0")
      ("fixme" . "FIXME: $0"))
-    ((rust-ts-mode mega-rust-mode)
+    ((rust)
      ("fn" . "fn ${1:name}(${2}) ${3:-> ${4:()} }{\n    $0\n}")
      ("test" . "#[test]\nfn ${1:name}() {\n    $0\n}")
      ("impl" . "impl ${1:Type} {\n    $0\n}")
      ("match" . "match ${1:value} {\n    ${2:pattern} => $0,\n}")
      ("for" . "for ${1:item} in ${2:items} {\n    $0\n}"))
-    ((python-mode python-ts-mode)
+    ((python)
      ("def" . "def ${1:name}(${2}):\n    $0")
      ("class" . "class ${1:Name}:\n    def __init__(self${2}):\n        $0")
      ("main" . "if __name__ == \"__main__\":\n    $0"))
-    ((c-mode c-ts-mode c++-mode c++-ts-mode)
+    ((c cpp)
      ("for" . "for (${1:int i = 0}; ${2:i < n}; ${3:i++}) {\n    $0\n}")
      ("main" . "int main(int argc, char **argv)\n{\n    $0\n    return 0;\n}"))
-    ((sh-mode bash-ts-mode)
+    ((shell)
      ("if" . "if ${1:condition}; then\n    $0\nfi")
      ("for" . "for ${1:item} in ${2:items}; do\n    $0\ndone")))
-  "MEGA's snippets: each element is (MODES (NAME . TEMPLATE)...).
-A snippet is available in buffers whose mode derives from one of MODES.")
+  "MEGA's snippets: each element is (WHERE (NAME . TEMPLATE)...).
+WHERE lists languages, by their names in `mega-languages', and major
+modes.  A snippet is available in a buffer of one of those languages,
+or whose mode derives from one of those modes.")
 
 ;;;; Reading a template
 
@@ -186,11 +189,15 @@ a number that repeats is listed for its first appearance only."
     (mega-snippet--go (car mega-snippet--visited))))
 
 (defun mega-snippet--watch ()
-  "End the snippet when the cursor has left it."
-  (when (and mega-snippet--active mega-snippet--bounds
-             (or (< (point) (car mega-snippet--bounds))
-                 (> (point) (cdr mega-snippet--bounds))))
-    (mega-snippet-finish)))
+  "End the snippet when the cursor has left it.
+An error in here ends it too: Emacs drops a function from this hook the
+first time it signals, and the snippet's keys would then stay for good."
+  (condition-case nil
+      (when (and mega-snippet--active mega-snippet--bounds
+                 (or (< (point) (car mega-snippet--bounds))
+                     (> (point) (cdr mega-snippet--bounds))))
+        (mega-snippet-finish))
+    (error (ignore-errors (mega-snippet-finish)))))
 
 (defvar mega-snippet-map
   (let ((map (make-sparse-keymap)))
@@ -250,9 +257,12 @@ Lines after the first are indented like the line it is inserted on."
 
 (defun mega-snippet-available ()
   "The snippets available in this buffer: an alist of (NAME . TEMPLATE)."
-  (let (found)
+  (let ((language (mega-lang-name))
+        found)
     (dolist (entry mega-snippets)
-      (when (apply #'derived-mode-p (car entry))
+      (when (seq-some (lambda (where)
+                        (or (eq where language) (derived-mode-p where)))
+                      (car entry))
         (setq found (append found (cdr entry)))))
     found))
 
@@ -303,9 +313,6 @@ Lines after the first are indented like the line it is inserted on."
 
 ;;;; The doctor
 
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
-(declare-function mega-doctor-check "mega-doctor")
 
 (defun mega-snippet--doctor ()
   "Insert the doctor's row about completions that are snippets.

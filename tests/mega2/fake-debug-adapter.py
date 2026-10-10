@@ -22,6 +22,11 @@ With MEGA_FAKE_DAP_STYLE=lldb it is lldb-dap 19 instead:
 
 The "program" stops at the first breakpoint it is given, in a function
 `square' called from `main', and prints 9 when it is continued to its end.
+`square' has an argument, x, and a local, result; `main' has two locals.
+How a frame's variables are cut into scopes is as each adapter does it:
+gdb gives arguments and locals apart, and leaves out a scope that would be
+empty; lldb gives one scope with both.  Neither marks the registers as
+expensive to read.
 Every request received is appended, as one line of JSON, to the file named
 by MEGA_FAKE_DAP_LOG.
 """
@@ -88,6 +93,11 @@ def frame_id(index):
 def stale(frame):
     """True if FRAME is an id from an earlier stop that is no longer valid."""
     return not LLDB and frame // 10 != stops
+
+
+def innermost(frame):
+    """True if FRAME is the id of the frame the program is stopped in."""
+    return frame == frame_id(0)
 
 
 def finish():
@@ -165,26 +175,43 @@ def handle(request):
         if stale(frame):
             respond(request, success=False, message="list index out of range")
         elif LLDB:
+            # One scope of locals, the arguments among them.
             respond(request, {"scopes": [
-                {"name": "Locals", "variablesReference": frame + 100, "expensive": False},
+                {"name": "Locals", "presentationHint": "locals",
+                 "variablesReference": frame + 100, "expensive": False},
                 {"name": "Globals", "variablesReference": 901, "expensive": False},
-                {"name": "Registers", "variablesReference": 900, "expensive": False}]})
+                {"name": "Registers", "presentationHint": "registers",
+                 "variablesReference": 900, "expensive": False}]})
         else:
-            respond(request, {"scopes": [
-                {"name": "Registers", "variablesReference": 900, "expensive": True},
-                {"name": "Locals", "variablesReference": frame + 100, "expensive": False}]})
+            # Arguments and locals apart, and a scope that would be empty
+            # left out: `main' takes no arguments.  The registers are not
+            # marked expensive, and come last.
+            scopes = []
+            if innermost(frame):
+                scopes.append({"name": "Arguments", "presentationHint": "arguments",
+                               "variablesReference": frame + 100, "expensive": False})
+            scopes.append({"name": "Locals", "presentationHint": "locals",
+                           "variablesReference": frame + 500, "expensive": False})
+            scopes.append({"name": "Registers", "presentationHint": "registers",
+                           "variablesReference": 900, "expensive": False})
+            respond(request, {"scopes": scopes})
     elif command == "variables":
         reference = arguments["variablesReference"]
+        x = {"name": "x", "value": "3", "variablesReference": 0}
+        result = {"name": "result", "value": "9", "variablesReference": 0}
+        outer = [{"name": "a", "value": "3", "variablesReference": 0},
+                 {"name": "b", "value": "ünïcödé", "variablesReference": 0}]
         if reference >= 900 and reference < 1000:
             respond(request, {"variables": [{"name": "rip", "value": "0x1157",
                                              "variablesReference": 0}]})
-        elif (reference - 100) % 10 == 0 or (LLDB and reference - 100 == 524288):
-            respond(request, {"variables": [
-                {"name": "x", "value": "3", "variablesReference": 0}]})
+        elif LLDB:
+            respond(request, {"variables": [x, result] if innermost(reference - 100)
+                              else outer})
+        elif reference >= 500:
+            respond(request, {"variables": [result] if innermost(reference - 500)
+                              else outer})
         else:
-            respond(request, {"variables": [
-                {"name": "a", "value": "3", "variablesReference": 0},
-                {"name": "b", "value": "ünïcödé", "variablesReference": 0}]})
+            respond(request, {"variables": [x]})
     elif command in ("next", "stepIn", "stepOut"):
         if LLDB:
             event("continued", {"threadId": THREAD, "allThreadsContinued": True})

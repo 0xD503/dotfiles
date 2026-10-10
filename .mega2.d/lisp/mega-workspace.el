@@ -23,8 +23,9 @@
 ;; * Resuming never closes anything.  It opens files and arranges windows; in
 ;;   a session that already has work on screen it does so in a new tab.
 ;;
-;; * A file `mega-private-file-p' recognises is never recorded, and neither
-;;   is a remote one: resuming must not open a network connection.
+;; * A file `mega-forgettable-file-p' recognises is never recorded, not even
+;;   as the name of a buffer some window showed; and neither is a remote
+;;   one: resuming must not open a network connection.
 ;;
 ;; * A workspace file is data.  It is read, never evaluated.
 ;;
@@ -35,7 +36,7 @@
 
 (require 'mega-lib)
 
-(declare-function mega-project-root "mega-project")
+(require 'mega-project)
 
 (defcustom mega-workspace-save-on-exit t
   "Whether leaving Emacs saves the session as an automatic workspace."
@@ -54,9 +55,7 @@
   "Non-nil if FILE may be recorded in a workspace."
   (and file
        (not (file-remote-p file))
-       (not (mega-private-file-p file))
-       (not (string-match-p "\\(?:COMMIT_EDITMSG\\|git-rebase-todo\\)\\'" file))
-       (not (file-in-directory-p file temporary-file-directory))))
+       (not (mega-forgettable-file-p file))))
 
 (defun mega-workspace--buffers ()
   "The buffers a workspace records, most recently used first."
@@ -90,23 +89,48 @@ marks it as saved by Emacs, not by you."
           :buffers (mapcar (lambda (buffer)
                              (cons (buffer-name buffer) (buffer-file-name buffer)))
                            buffers)
-          :windows (window-state-get (frame-root-window) t))))
+          :windows (mega-workspace--clean-windows
+                    (window-state-get (frame-root-window) t)
+                    (mapcar #'buffer-name buffers)))))
+
+(defun mega-workspace--clean-windows (state names)
+  "Window STATE with nothing in it but the buffers called NAMES.
+Emacs's description of a window layout names the buffer of each window
+and the buffers each window showed before.  A workspace is written to
+disk, so it may name only what it records: the earlier buffers are
+dropped, and a window on anything else loses the name of what it shows."
+  (cond ((and (consp state) (eq (car state) 'buffer)
+              (stringp (car-safe (cdr state))))
+         (if (member (cadr state) names)
+             state
+           (cons 'buffer (cons " mega-workspace-gone" (cddr state)))))
+        ((consp state)
+         (if (memq (car-safe (car state)) '(prev-buffers next-buffers))
+             (mega-workspace--clean-windows (cdr state) names)
+           (cons (mega-workspace--clean-windows (car state) names)
+                 (mega-workspace--clean-windows (cdr state) names))))
+        (t state)))
 
 ;;;; Storing
 
 (defun mega-workspace--file (name)
   "The file that stores the workspace called NAME.
 Anything but letters, digits, dot, dash and underscore is written as
-%XX, so that a name can be a path, or anything else, safely."
-  (expand-file-name
-   (concat (replace-regexp-in-string
-            "[^[:alnum:]._-]"
-            (lambda (char)
-              (mapconcat (lambda (byte) (format "%%%02X" byte))
-                         (encode-coding-string char 'utf-8) ""))
-            name t t)
-           ".eld")
-   mega-workspace-directory))
+%XX, so that a name can be a path, or anything else, safely.  A name
+too long for a file name, which the path of a deep project is, keeps its
+start for the reader and gets a hash of the whole for the rest."
+  (let ((encoded (replace-regexp-in-string
+                  "[^[:alnum:]._-]"
+                  (lambda (char)
+                    (mapconcat (lambda (byte) (format "%%%02X" byte))
+                               (encode-coding-string char 'utf-8) ""))
+                  name t t)))
+    (expand-file-name
+     (concat (if (> (length encoded) 200)
+                 (concat (substring encoded 0 150) "-" (secure-hash 'sha1 name))
+               encoded)
+             ".eld")
+     mega-workspace-directory)))
 
 (defun mega-workspace-write (workspace)
   "Store WORKSPACE and return it."

@@ -36,6 +36,45 @@
 (load (expand-file-name "early-init.el" mega-test-config-dir) nil :nomessage)
 (load (expand-file-name "init.el" mega-test-config-dir) nil :nomessage)
 
+;; MEGA's Lisp runs in one of two forms, and the tests are run on each.  A
+;; pass that quietly ran the other form would prove nothing about its own,
+;; so the runner says which one it means, and this checks.
+(pcase (getenv "MEGA_TEST_FORM")
+  ("compiled"
+   (unless (and mega-compiled-p
+                (not (interpreted-function-p (symbol-function 'mega-load-module)))
+                (not (interpreted-function-p (symbol-function 'mega-trust-p))))
+     (error "This pass is about the compiled copy, and the source is what ran")))
+  ("source"
+   (when (or mega-compiled-p
+             (not (interpreted-function-p (symbol-function 'mega-trust-p))))
+     (error "This pass is about the source, and a compiled copy is what ran"))))
+
+(defconst mega-test-temporary-directories mega-temporary-directories
+  "The directories MEGA takes for temporary as it ships, for tests of that.")
+
+;; The sandbox is itself under the temporary directory, and MEGA keeps no
+;; trace of a temporary file.  Left alone, that rule would make every test
+;; of history, undo, recent files and workspaces pass by doing nothing, so it
+;; is lifted here and put back by the tests that are about it.
+(setq mega-temporary-directories nil)
+
+;; A test that waits for something that never comes would hang the whole
+;; run.  The runner names a number of seconds; when they are up, Emacs says
+;; where it is waiting and stops.  (This works where a test hangs the usual
+;; way, waiting for a program; a loop that never waits is beyond it, and is
+;; left to the runner's own limit.)
+(when-let* ((seconds (getenv "MEGA_TEST_WATCHDOG"))
+            ((string-match-p "\\`[0-9]+\\'" seconds)))
+  (run-at-time (string-to-number seconds) nil
+               (lambda ()
+                 (message "\nThe tests have run for %s seconds.  Emacs is waiting here:"
+                          seconds)
+                 (let ((standard-output #'external-debugging-output)
+                       (backtrace-line-length 300))
+                   (backtrace))
+                 (kill-emacs 124))))
+
 (defconst mega-test-features-at-startup (copy-sequence features)
   "What was loaded once init.el had finished, before any test ran.
 Tests load more; a claim about startup has to be checked against this.")

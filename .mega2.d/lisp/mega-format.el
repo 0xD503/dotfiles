@@ -36,7 +36,9 @@
 (require 'mega-exec)
 (require 'mega-trust)
 
-(declare-function mega-project-root "mega-project")
+(require 'mega-project)
+(require 'mega-lang)
+
 (declare-function eglot-managed-p "eglot")
 (declare-function eglot-server-capable "eglot")
 (declare-function eglot-format-buffer "eglot")
@@ -54,29 +56,14 @@ Set it to nil in a buffer, or in local.el, to save without formatting."
   "Largest buffer, in characters, that is formatted on save."
   :type 'integer :group 'mega)
 
-(defvar mega-formatters
-  '(((rust-ts-mode mega-rust-mode) ("rustfmt" "--emit" "stdout" edition))
-    ((c-mode c-ts-mode c++-mode c++-ts-mode)
-     ("clang-format" assume-filename))
-    ((python-mode python-ts-mode)
-     ("ruff" "format" "--stdin-filename" file "-")
-     ("black" "--quiet" "-"))
-    ((sh-mode bash-ts-mode) ("shfmt" "-"))
-    ((go-ts-mode) ("gofmt"))
-    ((mega-zig-mode) ("zig" "fmt" "--stdin"))
-    ((lua-mode lua-ts-mode) ("stylua" "-"))
-    ((conf-toml-mode toml-ts-mode) ("taplo" "format" "-")))
-  "Formatters by major mode: each element is (MODES COMMAND...).
-A COMMAND is an argument list for a program that reads the code on
-standard input and writes the formatted code on standard output; the
-first whose program exists is used.  The symbols `file', `edition' and
-`assume-filename' stand for arguments worked out for the buffer.")
-
-(defvar mega-format-project-commands
-  '(("Cargo.toml" "cargo" "fmt")
-    ("go.mod" "gofmt" "-w" ".")
-    ("build.zig" "zig" "fmt" "."))
-  "Whole-project formatters: (MARKER-FILE PROGRAM ARG...) per kind of project.")
+(defvar mega-formatters nil
+  "Formatters by major mode, ahead of those `mega-languages' names.
+For a mode that is in no language row, or to replace what a row says.
+Each element is (MODES COMMAND...).  A COMMAND is an argument list for
+a program that reads the code on standard input and writes the
+formatted code on standard output; the first whose program exists is
+used.  The symbols `file', `edition' and `assume-filename' stand for
+arguments worked out for the buffer.")
 
 ;;;; Choosing the formatter
 
@@ -101,12 +88,19 @@ first whose program exists is used.  The symbols `file', `edition' and
                        (_ (list argument))))
                    command))))
 
+(defun mega-format-candidates ()
+  "The formatter command lines that suit this buffer, best first.
+From `mega-formatters' if the mode is there, else from the row of the
+buffer's language in `mega-languages'."
+  (if-let* ((entry (seq-find (lambda (entry) (apply #'derived-mode-p (car entry)))
+                             mega-formatters)))
+      (cdr entry)
+    (mega-lang-get :formatters)))
+
 (defun mega-format-command ()
   "The formatter command for this buffer, as an argument list, or nil."
-  (when-let* ((entry (seq-find (lambda (entry) (apply #'derived-mode-p (car entry)))
-                               mega-formatters))
-              (command (seq-find (lambda (command) (mega-exec-find (car command)))
-                                 (cdr entry))))
+  (when-let* ((command (seq-find (lambda (command) (mega-exec-find (car command)))
+                                 (mega-format-candidates))))
     (mega-format--expand command)))
 
 (defun mega-format--server-p ()
@@ -171,8 +165,16 @@ saving calls it, say nothing unless something went wrong."
                (eq outcome 'changed))
               (t (eq outcome 'changed)))))
      ((mega-format--server-p)
+      ;; The server gets as long as any other formatter and no longer.  The
+      ;; limit has to be set from outside: eglot waits for this answer for
+      ;; as long as it takes.  An answer that does come is applied whole or
+      ;; not at all, and one that comes too late is dropped.
       (condition-case err
-          (progn (eglot-format-buffer) t)
+          (with-timeout (mega-format-timeout
+                         (error "The language server took more than %s seconds"
+                                mega-format-timeout))
+            (eglot-format-buffer)
+            t)
         (error (message "Not formatted: %s" (error-message-string err)) nil)))
      (t (unless quiet
           (message "No formatter for %s is installed" major-mode))
@@ -184,8 +186,13 @@ saving calls it, say nothing unless something went wrong."
              buffer-file-name
              (not (file-remote-p buffer-file-name))
              (<= (buffer-size) mega-format-max-size))
+    ;; Whatever happens in here, the save goes on.  That includes C-g:
+    ;; pressed because a formatter hangs, it means "stop formatting", and a
+    ;; file left unsaved by it would be the one thing worse than a file
+    ;; saved unformatted.
     (condition-case err
         (mega-format-buffer :quiet)
+      (quit (message "Formatting interrupted; saved as it was"))
       (error (message "Not formatted: %s" (error-message-string err))))))
 
 (add-hook 'before-save-hook #'mega-format-before-save)
@@ -196,10 +203,9 @@ saving calls it, say nothing unless something went wrong."
 Unsaved buffers are offered for saving first; open buffers pick the
 result up by themselves."
   (interactive)
-  (let* ((root (or (mega-project-root) default-directory))
-         (command (cdr (seq-find (lambda (entry)
-                                   (file-exists-p (expand-file-name (car entry) root)))
-                                 mega-format-project-commands))))
+  (let* ((root (mega-project-directory))
+         (command (seq-some (lambda (kind) (plist-get (cdr kind) :format))
+                            (mega-project-kinds-of root))))
     (unless command
       (user-error "MEGA knows no whole-project formatter for %s"
                   (abbreviate-file-name root)))
@@ -218,17 +224,25 @@ result up by themselves."
 
 ;;;; The doctor
 
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
 
 (defun mega-format--doctor ()
   "Insert the doctor's section about formatters."
   (mega-doctor-heading "Formatters")
-  (dolist (entry mega-formatters)
+  (dolist (entry (append (mapcar (lambda (entry)
+                                   (cons (replace-regexp-in-string
+                                          "\\(?:-ts\\)?-mode\\'" ""
+                                          (symbol-name (caar entry)))
+                                         (cdr entry)))
+                                 mega-formatters)
+                         (delq nil
+                               (mapcar (lambda (spec)
+                                         (when-let* ((commands (plist-get (cdr spec)
+                                                                          :formatters)))
+                                           (cons (symbol-name (car spec)) commands)))
+                                       mega-languages))))
     (let* ((programs (mapcar #'car (cdr entry)))
            (found (seq-find #'mega-exe-p programs)))
-      (mega-doctor-row (replace-regexp-in-string
-                        "\\(?:-ts\\)?-mode\\'" "" (symbol-name (caar entry)))
+      (mega-doctor-row (car entry)
                        (if found
                            (format "%s  (on save, in a trusted project)" found)
                          (format "not found: %s" (string-join programs ", ")))

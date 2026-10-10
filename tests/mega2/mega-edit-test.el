@@ -160,6 +160,52 @@
     (should (equal (buffer-string) "a\nb\n"))
     (should-not (text-property-any (point-min) (point-max) 'mega-edit-changed t))))
 
+(ert-deftest mega-edit-the-project-decides-about-trailing-whitespace ()
+  "An .editorconfig that says to leave it is obeyed, on a real save."
+  (mega-test-with-directory dir
+    (mega-test-write (expand-file-name ".editorconfig" dir)
+                     "root = true" "" "[*.txt]" "trim_trailing_whitespace = false"
+                     "" "[*.md]" "trim_trailing_whitespace = true" "")
+    (let ((inhibit-message t))
+      (mega-test-visiting buffer (expand-file-name "notes.txt" dir)
+        (insert "kept as typed   \nsecond line\t\n")
+        (goto-char (point-min))
+        (save-buffer))
+      (should (equal (with-temp-buffer
+                       (insert-file-contents (expand-file-name "notes.txt" dir))
+                       (buffer-string))
+                     "kept as typed   \nsecond line\t\n"))
+      ;; And one that says to trim is obeyed where MEGA alone would not.
+      (mega-test-visiting buffer (expand-file-name "page.md" dir)
+        (insert "trimmed  \nlast\n")
+        (goto-char (point-max))
+        (save-buffer))
+      (should (equal (with-temp-buffer
+                       (insert-file-contents (expand-file-name "page.md" dir))
+                       (buffer-string))
+                     "trimmed\nlast\n")))))
+
+(ert-deftest mega-edit-a-markdown-line-break-survives-a-save ()
+  "Two spaces at the end of a line are a line break there, not litter."
+  (mega-test-with-directory dir
+    (let ((file (expand-file-name "page.md" dir))
+          (inhibit-message t))
+      (mega-test-visiting buffer file
+        (should (derived-mode-p 'mega-markdown-mode))
+        (insert "hard break here  \nnext line\n")
+        (goto-char (point-max))
+        (save-buffer))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string))
+                     "hard break here  \nnext line\n"))
+      ;; The contrast: the same text in a file of code is trimmed.
+      (let ((code (expand-file-name "tool.sh" dir)))
+        (mega-test-visiting buffer code
+          (insert "echo one  \necho two\n")
+          (goto-char (point-max))
+          (save-buffer))
+        (should (equal (with-temp-buffer (insert-file-contents code) (buffer-string))
+                       "echo one\necho two\n"))))))
+
 (ert-deftest mega-edit-trimming-is-on-where-text-is-written ()
   (dolist (mode '(prog-mode text-mode conf-mode))
     (with-temp-buffer (funcall mode) (should mega-edit-trim-mode)))
@@ -240,6 +286,32 @@
       (should (equal (mega-clipboard-paste) "from elsewhere"))
       (should-not (mega-clipboard-paste)))))
 
+(ert-deftest mega-clipboard-is-the-one-on-this-machine ()
+  "Killing and yanking in a buffer of a remote file must not reach for the
+clipboard of the other machine, at every kill and every yank."
+  (mega-test-with-directory dir
+    (let* ((bin (expand-file-name "bin/" dir))
+           (store (expand-file-name "clipboard" dir))
+           (tool (mega-test-write
+                  (expand-file-name "xclip" bin)
+                  "#!/bin/sh"
+                  (format "case \"$*\" in *-out*) cat '%s' ;; *) cat > '%s' ;; esac" store store)
+                  ""))
+           (exec-path (cons bin exec-path))
+           (process-environment (cons "DISPLAY=:99" process-environment))
+           (mega--exe-cache (make-hash-table :test #'equal))
+           (mega-clipboard--last nil)
+           ;; A host that does not exist: touching it would fail or hang.
+           (default-directory "/ssh:mega-test.invalid:/srv/"))
+      (set-file-modes tool #o755)
+      (mega-clipboard-copy "copied here")
+      (should (mega-test-wait-for (lambda () (and (file-exists-p store)
+                                                   (> (file-attribute-size
+                                                       (file-attributes store))
+                                                      0)))))
+      (setq mega-clipboard--last nil)
+      (should (equal (mega-clipboard-paste) "copied here")))))
+
 (ert-deftest mega-clipboard-never-signals ()
   (cl-letf (((symbol-function 'mega-clipboard--tool)
              (lambda () '(("mega-test-no-such-tool") . ("mega-test-no-such-tool")))))
@@ -258,6 +330,33 @@
           (push (current-column) columns))
         (forward-char 1)))
     (nreverse columns)))
+
+(ert-deftest mega-indent-guides-leave-other-features-display-alone ()
+  "A guide is one way of displaying a space; it must not claim them all."
+  (with-temp-buffer
+    (insert "top\n    one\n        two\n")
+    (prog-mode)
+    ;; Something else shows the word `top' as something else.
+    (with-silent-modifications
+      (put-text-property 1 4 'display "TOP"))
+    (mega-indent-guides-mode 1)
+    (font-lock-ensure)
+    (should (equal (get-text-property 1 'display) "TOP"))
+    ;; Re-highlighting, which removes and redraws the guides...
+    (font-lock-flush)
+    (font-lock-ensure)
+    (should (equal (get-text-property 1 'display) "TOP"))
+    (goto-char (point-min))
+    (forward-line 2)
+    (should (mega-edit-test--guide-columns))
+    ;; ...and switching the guides off, leave it where it was.
+    (mega-indent-guides-mode -1)
+    (should (equal (get-text-property 1 'display) "TOP"))
+    (goto-char (point-min))
+    (forward-line 2)
+    (should-not (mega-edit-test--guide-columns))
+    (should-not (memq 'mega-indent-guides-display
+                      (cdr (assq 'display char-property-alias-alist))))))
 
 (ert-deftest mega-indent-guides-mark-each-level-inside-the-indentation ()
   (with-temp-buffer

@@ -34,10 +34,13 @@ Every choice MEGA offers is a user option in this group, so
   :group 'convenience
   :prefix "mega-")
 
-(defconst mega-lisp-dir (file-name-directory (or load-file-name buffer-file-name))
-  "Directory holding MEGA's own Lisp.")
+;; early-init.el says where MEGA is, before this file loads: this file may
+;; itself come from a compiled copy kept in another place.  What follows is
+;; for an Emacs that loaded this file by itself.
+(defvar mega-lisp-dir (file-name-directory (or load-file-name buffer-file-name))
+  "Directory holding MEGA's own Lisp, as source.")
 
-(defconst mega-dir (file-name-directory (directory-file-name mega-lisp-dir))
+(defvar mega-dir (file-name-directory (directory-file-name mega-lisp-dir))
   "MEGA's configuration directory, the deployed copy of `.mega2.d'.
 Nothing is written here at runtime.")
 
@@ -91,34 +94,91 @@ files inside were created with."
 (defun mega-state (name) "Path to NAME in `mega-state-dir'." (mega--in mega-state-dir name))
 (defun mega-data  (name) "Path to NAME in `mega-data-dir'."  (mega--in mega-data-dir  name))
 
-;;;; Private files
+;;;; What must not be remembered
+;;
+;; One rule, asked from one place.  History, recent files, cursor places,
+;; undo history, recent projects and workspaces all write something about a
+;; file to disk; each of them asks `mega-forgettable-file-p' first, so that
+;; they cannot disagree about a file that should leave no trace.
 
 (defcustom mega-private-file-regexps
   '("\\.gpg\\'" "\\.age\\'" "\\.asc\\'" "\\.pem\\'" "\\.key\\'"
-    "\\.p12\\'" "\\.pfx\\'" "\\.kdbx?\\'"
+    "\\.p12\\'" "\\.pfx\\'" "\\.kdbx?\\'" "\\.tfvars\\(?:\\.json\\)?\\'"
     "/\\.ssh/" "/\\.gnupg/" "/\\.password-store/" "/\\.aws/"
+    "/\\.kube/config\\'" "/\\.docker/config\\.json\\'"
     "/id_\\(?:rsa\\|dsa\\|ecdsa\\|ed25519\\)[^/]*\\'"
     "/\\.env\\(?:\\.[^/]*\\)?\\'"
     "/\\.netrc\\'" "/\\.authinfo\\'" "/\\.npmrc\\'" "/\\.pypirc\\'"
+    "/\\.git-credentials\\'" "/\\.pgpass\\'" "/\\.htpasswd\\'"
     "/\\.?\\(?:secrets?\\|credentials\\)\\(?:\\.\\(?:ya?ml\\|json\\|toml\\|ini\\|env\\|txt\\)\\)?\\'"
     ;; Where `pass', `sudoedit' and friends put a secret while you edit it.
     "\\`/dev/shm/" "\\`/run/user/")
   "Regexps matching files whose names or contents MEGA must not remember.
-A file matching any of these is left out of the recent-files list and
-saved cursor places, and will be left out of persistent undo.  Backups
-and auto-saves still cover it: losing work is worse than keeping a copy
-in a directory only you can read."
+Backups and auto-saves still cover such a file: losing work is worse
+than keeping a copy in a directory only you can read."
   :type '(repeat regexp)
   :group 'mega)
 
-(defun mega-private-file-p (file)
-  "Non-nil if FILE matches one of `mega-private-file-regexps'."
-  (let ((name (expand-file-name file))
-        (case-fold-search nil)
-        (found nil))
-    (dolist (regexp mega-private-file-regexps found)
+(defcustom mega-passing-file-regexps
+  '("/COMMIT_EDITMSG\\'" "/MERGE_MSG\\'" "/TAG_EDITMSG\\'" "/SQUASH_MSG\\'"
+    "/git-rebase-todo\\'" "/addp-hunk-edit\\.diff\\'")
+  "Regexps matching files that exist for the length of one command.
+A commit message is the usual one.  Nothing about them is worth keeping."
+  :type '(repeat regexp)
+  :group 'mega)
+
+(defcustom mega-temporary-directories
+  (delete-dups
+   (mapcar #'file-name-as-directory
+           (delq nil (list temporary-file-directory (getenv "TMPDIR")
+                           "/tmp" "/var/tmp" (getenv "XDG_RUNTIME_DIR")))))
+  "Directories whose files are temporary: nothing about them is remembered.
+A secret is often written to one for the time it takes to edit it."
+  :type '(repeat directory)
+  :group 'mega)
+
+(defun mega--matches-p (regexps name)
+  "Non-nil if NAME matches one of REGEXPS, case counting."
+  (let ((case-fold-search nil) (found nil))
+    (dolist (regexp regexps found)
       (when (string-match-p regexp name)
         (setq found t)))))
+
+(defun mega--names-of (file)
+  "The names FILE is to be judged by: as given, and with links followed.
+A link called `keys' that leads into ~/.ssh is as private as ~/.ssh.
+Links are not followed on another machine: that would be a round trip."
+  (let ((name (expand-file-name file)))
+    (if (file-remote-p name)
+        (list name)
+      (delete-dups (list name (file-truename name))))))
+
+(defun mega-private-file-p (file)
+  "Non-nil if FILE matches one of `mega-private-file-regexps'."
+  (let ((found nil))
+    (dolist (name (mega--names-of file) found)
+      (when (mega--matches-p mega-private-file-regexps name)
+        (setq found t)))))
+
+(defun mega-temporary-file-p (file)
+  "Non-nil if FILE lies in one of `mega-temporary-directories'."
+  (let ((found nil))
+    (dolist (name (mega--names-of file) found)
+      (dolist (directory mega-temporary-directories)
+        (when (string-prefix-p (file-name-as-directory (expand-file-name directory))
+                               name)
+          (setq found t))))))
+
+(defun mega-forgettable-file-p (file)
+  "Non-nil if MEGA must keep no trace of FILE between sessions.
+That is so for a private file, a temporary one, one that exists for the
+length of a command, and for MEGA's own state."
+  (or (mega-private-file-p file)
+      (mega-temporary-file-p file)
+      (let ((name (expand-file-name file)))
+        (or (mega--matches-p mega-passing-file-regexps name)
+            (string-prefix-p (expand-file-name mega-state-dir) name)
+            (string-prefix-p (expand-file-name mega-cache-dir) name)))))
 
 ;;;; Probing the machine
 
@@ -134,11 +194,18 @@ Memoised: MEGA asks about the same dozen programs repeatedly, and
         (puthash name (executable-find name) mega--exe-cache)
       hit)))
 
+(defvar mega-forget-functions nil
+  "Functions that forget what a module found out about the programs installed.
+Called by `mega-forget-executables'; each module that remembers the
+answer to such a question adds one.")
+
 (defun mega-forget-executables ()
-  "Forget cached `mega-exe-p' answers, after installing a tool mid-session."
+  "Forget what MEGA found out about which programs are installed.
+For after installing a tool, or changing a container, mid-session."
   (interactive)
   (clrhash mega--exe-cache)
-  (message "MEGA: executable cache cleared"))
+  (run-hooks 'mega-forget-functions)
+  (message "MEGA: forgot which programs are installed; it will look again"))
 
 ;;;; Work that can wait until Emacs is on screen
 
@@ -168,6 +235,26 @@ startup is already over, and in a batch Emacs, which has no idle time."
   "Functions that each insert one more section into the `mega-doctor' report.
 Lives here, not in mega-doctor.el, so that a module can add its section
 without loading the doctor: `(add-to-list \\='mega-doctor-sections #\\='f t)'.")
+
+;;;; Writing a section of the doctor's report
+;;
+;; Here rather than in mega-doctor.el so that a module can describe itself
+;; without loading the doctor, or declaring its functions one by one.
+
+(defun mega-doctor-heading (text)
+  "Insert TEXT as a section heading of the doctor's report."
+  (insert (propertize (concat "\n" text "\n") 'face 'bold)))
+
+(defun mega-doctor-row (label value &optional face)
+  "Insert one row of the doctor's report: LABEL, then VALUE, optionally in FACE."
+  (insert (format "  %-28s %s\n" label
+                  (if face (propertize value 'face face) value))))
+
+(defun mega-doctor-check (label ok good bad)
+  "Insert a row for LABEL saying GOOD if OK is non-nil, else BAD.
+Returns OK, so callers can count problems."
+  (mega-doctor-row label (if ok good bad) (if ok 'success 'error))
+  ok)
 
 (defun mega-load-module (spec)
   "Load one entry of `mega-modules'.

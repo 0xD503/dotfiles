@@ -65,6 +65,18 @@
       ;; What is left is the start of the next one.
       (should (equal (buffer-string) (substring two 0 5))))))
 
+(ert-deftest mega-dap-one-unreadable-message-does-not-cost-the-others ()
+  (let ((good-1 (mega-dap-encode '(:seq 1 :type "event" :event "output")))
+        (bad "Content-Length: 9\r\n\r\n{\"a\": tru")
+        (good-2 (mega-dap-encode '(:seq 2 :type "event" :event "stopped"))))
+    (mega-dap-test--with-bytes
+      (insert good-1 bad good-2)
+      (let ((messages (mega-dap-take (current-buffer))))
+        (should (equal (mapcar (lambda (message) (plist-get message :type)) messages)
+                       '("event" "unreadable" "event")))
+        (should (equal (plist-get (nth 2 messages) :seq) 2))
+        (should (= (buffer-size) 0))))))
+
 (ert-deftest mega-dap-stray-output-before-a-message-is-skipped ()
   (mega-dap-test--with-bytes
     (insert "warning: something a program printed\n"
@@ -353,8 +365,9 @@ LOG is the file the adapter writes the requests it receives to."
     (should (equal (mega-dap-test--arrow-line) (cons file 5)))
     (should (equal (mapcar (lambda (frame) (plist-get frame :name)) mega-dap--frames)
                    '("square" "main" "__libc_start_call_main")))
-    ;; The locals, not the registers the adapter lists first.
-    (should (equal mega-dap--locals '(("x" . "3"))))
+    ;; The argument and the local, which gdb lists apart; not the
+    ;; registers, which it lists too and does not mark as costly.
+    (should (equal mega-dap--locals '(("x" . "3") ("result" . "9"))))
     (let ((shown (mega-test-buffer-string mega-dap-info-buffer)))
       (should (string-match-p "^Stopped: breakpoint$" shown))
       (should (string-match-p "^> square +main\\.c:5$" shown))
@@ -393,6 +406,54 @@ LOG is the file the adapter writes the requests it receives to."
       (should (equal said "6 = 9")))
     (should-not (seq-some (lambda (line) (string-match-p "failed" line))
                           mega-dap--output))))
+
+(ert-deftest mega-dap-a-frame-s-own-variables-whatever-the-adapter-calls-them ()
+  "As recorded from gdb 16.3 and lldb-dap 19, and one that says nothing."
+  (let ((names (lambda (scopes)
+                 (mapcar (lambda (scope) (plist-get scope :name))
+                         (mega-dap--own-scopes scopes)))))
+    ;; gdb: arguments and locals apart, registers cheap.
+    (should (equal (funcall names '((:name "Arguments" :presentationHint "arguments")
+                                    (:name "Locals" :presentationHint "locals")
+                                    (:name "Registers" :presentationHint "registers")))
+                   '("Arguments" "Locals")))
+    ;; gdb, in a function that takes nothing and has no locals either.
+    (should-not (funcall names '((:name "Registers" :presentationHint "registers"))))
+    ;; lldb: one scope for both, and globals, which are not the frame's.
+    (should (equal (funcall names '((:name "Locals" :presentationHint "locals")
+                                    (:name "Globals")
+                                    (:name "Registers" :presentationHint "registers")))
+                   '("Locals")))
+    ;; An adapter that does not say: the first that is cheap.
+    (should (equal (funcall names '((:name "Registers" :expensive t)
+                                    (:name "Local")
+                                    (:name "Static")))
+                   '("Local")))))
+
+(ert-deftest mega-dap-a-late-answer-about-another-frame-is-not-shown ()
+  "Variables asked for at one frame must not turn up under the next."
+  (skip-unless (executable-find "python3"))
+  (mega-dap-test--session
+    (mega-dap-test--start dir)
+    (let ((held nil))
+      ;; Hold back the answers to what is asked from now on.
+      (cl-letf* ((request (symbol-function 'mega-dap--request))
+                 ((symbol-function 'mega-dap--request)
+                  (lambda (command arguments &optional then)
+                    (funcall request command arguments
+                             (if (equal command "variables")
+                                 (lambda (answer) (push (cons then answer) held))
+                               then)))))
+        (mega-dap--select 0)
+        (should (mega-test-wait-for (lambda () (= (length held) 2)) 20)))
+      ;; Meanwhile the other frame was chosen, and answered.
+      (mega-dap--select 1)
+      (should (mega-test-wait-for (lambda () (equal (mapcar #'car mega-dap--locals)
+                                                    '("a" "b")))
+                                  20))
+      ;; Now the old answers arrive.
+      (dolist (late held) (funcall (car late) (cdr late)))
+      (should (equal (mapcar #'car mega-dap--locals) '("a" "b"))))))
 
 (ert-deftest mega-dap-going-up-the-stack-shows-that-frame ()
   (skip-unless (executable-find "python3"))
@@ -512,6 +573,43 @@ LOG is the file the adapter writes the requests it receives to."
       (should (member "The debugger has ended" mega-dap--output))
       (should-error (mega-dap-do 'continue) :type 'user-error))))
 
+(ert-deftest mega-dap-a-file-on-another-machine-is-not-opened-to-show-a-line ()
+  "A frame in a system header inside the container: named, not fetched."
+  (mega-dap-test--session
+    (let ((opened nil)
+          (mega-dap--frames '((:id 1 :name "printf"
+                               :file "/podman:mega-test:/usr/include/stdio.h" :line 3))))
+      (cl-letf (((symbol-function 'find-file-noselect)
+                 (lambda (name &rest _) (push name opened) (current-buffer))))
+        (mega-dap--show-line (car mega-dap--frames))
+        (accept-process-output nil 0.1)
+        (should-not opened)
+        (should-not (mega-dap-test--arrow-line))))))
+
+(ert-deftest mega-dap-what-was-found-out-can-be-forgotten ()
+  (mega-dap-test--with-gdb "GNU gdb (GDB) 16.3"
+    (should (mega-dap-choose 'native dir))
+    ;; gdb is replaced by one too old; MEGA still believes what it saw...
+    (mega-test-write (expand-file-name "bin/gdb" dir)
+                     "#!/bin/sh" "echo 'GNU gdb (GDB) 12.1'" "")
+    (should (mega-dap-choose 'native dir))
+    ;; ...until told to look again.
+    (let ((inhibit-message t)) (mega-forget-executables))
+    (should-not (mega-dap-choose 'native dir))))
+
+(ert-deftest mega-dap-not-being-able-to-ask-is-not-an-answer ()
+  "A version check that failed to run is tried again, not remembered as no."
+  (mega-dap-test--with-gdb "GNU gdb (GDB) 16.3"
+    (let ((fail t))
+      (cl-letf* ((run (symbol-function 'mega-exec-run))
+                 ((symbol-function 'mega-exec-run)
+                  (lambda (&rest arguments)
+                    (if fail '(:status nil :output "" :stopped timeout)
+                      (apply run arguments)))))
+        (should-not (mega-dap-choose 'native dir))
+        (setq fail nil)
+        (should (mega-dap-choose 'native dir))))))
+
 (ert-deftest mega-dap-nonsense-from-the-adapter-is-noted-not-raised ()
   (mega-dap-test--session
     (let ((mega-dap--state 'running))
@@ -520,7 +618,10 @@ LOG is the file the adapter writes the requests it receives to."
       (mega-dap--receive '(:type "response" :request_seq 998 :command "next"
                            :message "not now"))
       (mega-dap--receive '(:type "who-knows"))
-      (should (member "next failed: not now" mega-dap--output)))))
+      (mega-dap--receive '(:type "unreadable"))
+      (should (member "next failed: not now" mega-dap--output))
+      (should (member "The debugger said something MEGA could not read"
+                      mega-dap--output)))))
 
 ;;;; lldb's adapter, which behaves differently in every detail that matters
 
@@ -533,7 +634,8 @@ LOG is the file the adapter writes the requests it receives to."
       (should (equal (take 4 (mega-dap-test--commands log))
                      '("initialize" "launch" "setBreakpoints" "configurationDone")))
       (should (equal (mega-dap-test--arrow-line) (cons file 5)))
-      (should (equal mega-dap--locals '(("x" . "3"))))
+      ;; The same two as with gdb, though lldb gives them as one scope.
+      (should (equal mega-dap--locals '(("x" . "3") ("result" . "9"))))
       (should (= mega-dap--thread 20))
       ;; It announces a step before it answers the request for one.
       (mega-dap-do 'next)
@@ -555,6 +657,49 @@ LOG is the file the adapter writes the requests it receives to."
                               (string-match-p "invalid pointer\\|bug report" line))
                             mega-dap--output)))))
 
+(ert-deftest mega-dap-lldb-is-not-told-to-fix-addresses-where-none-are-to-be-had ()
+  "Found in a real container: its kernel refuses a debugger that asks for
+every run to look alike, and lldb's adapter then starts nothing at all."
+  (mega-test-with-directory dir
+    (let ((mega-dap--fixed-addresses (make-hash-table :test #'equal))
+          (mega-exec-context-functions nil)
+          (asked 0)
+          (answer (list :status 1 :output "" :error "Function not implemented")))
+      (cl-letf (((symbol-function 'mega-exec-run)
+                 (lambda (program args &rest options)
+                   (should (equal program "sh"))
+                   (should (string-match-p "setarch" (cadr args)))
+                   ;; Where the project's tools run, and not for ever.
+                   (should (equal (plist-get options :directory) dir))
+                   (should (numberp (plist-get options :timeout)))
+                   (should-not (plist-get options :here))
+                   (setq asked (1+ asked))
+                   (if (eq answer 'broken) (error "No such program") answer))))
+        (should (equal (mega-dap-lldb-launch 'native dir) '(:disableASLR :false)))
+        ;; Asked once per place, however often a program is started.
+        (mega-dap-lldb-launch 'native dir)
+        (should (= asked 1))
+        ;; What goes over the wire is a false, not a word.
+        (should (string-match-p "\"disableASLR\":false"
+                                (mega-dap-encode
+                                 (list :arguments (mega-dap-lldb-launch 'native dir)))))
+        ;; Where the kernel agrees, lldb is left to do what it does.
+        (clrhash mega-dap--fixed-addresses)
+        (setq answer (list :status 0 :output "" :error ""))
+        (should-not (mega-dap-lldb-launch 'native dir))
+        ;; It could not even be asked: the careful answer.
+        (clrhash mega-dap--fixed-addresses)
+        (setq answer 'broken)
+        (should (equal (mega-dap-lldb-launch 'native dir) '(:disableASLR :false)))))
+    ;; Forgotten with everything else that is known about a place.
+    (should (memq #'mega-dap--forget mega-forget-functions))
+    (let ((mega-dap--fixed-addresses (make-hash-table :test #'equal))
+          (mega-dap--usable (make-hash-table :test #'equal))
+          (mega-dap--rust-support (make-hash-table :test #'equal)))
+      (puthash nil 'no mega-dap--fixed-addresses)
+      (mega-dap--forget)
+      (should (= (hash-table-count mega-dap--fixed-addresses) 0)))))
+
 (ert-deftest mega-dap-rust-values-are-readable-with-lldb ()
   "lldb is given the commands `rust-lldb' gives it, where Rust has them."
   (mega-test-with-directory dir
@@ -566,6 +711,11 @@ LOG is the file the adapter writes the requests it receives to."
                                       process-environment))
            (mega--exe-cache (make-hash-table :test #'equal))
            (mega-dap--rust-support (make-hash-table :test #'equal))
+           ;; On a machine that lets a debugger fix addresses, whatever
+           ;; this one does: that is another test's subject.
+           (mega-dap--fixed-addresses (let ((table (make-hash-table :test #'equal)))
+                                        (puthash nil 'yes table)
+                                        table))
            (mega-exec-context-functions nil))
       (set-file-modes (mega-test-write (expand-file-name "rustc" bin)
                                        "#!/bin/sh" (format "echo '%s'" sysroot) "")
@@ -707,6 +857,7 @@ CONTAINER is a context function that puts the project in a container."
                   (lambda (directory)
                     (when (file-in-directory-p directory dir)
                       (list :kind 'container :name (format "box-%s" programs)
+                            :key (format "id-%s" programs)
                             :wrap (lambda (program args _where) (cons program args))
                             :find (lambda (program) (member program programs))
                             :to-inside #'identity :to-host #'identity))))))

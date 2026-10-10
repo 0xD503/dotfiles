@@ -25,7 +25,7 @@
 (defvar package-archives)
 (defvar package--initialized)
 
-(defconst mega-doctor-tools '("git" "rg" "fd" "fdfind" "cc")
+(defconst mega-doctor-tools '("git" "rg" "cc")
   "Optional programs the base reports on.  Feature modules report their own.")
 
 (defvar mega-doctor--lazy nil
@@ -44,21 +44,6 @@ it, or the message of the error loading it raised.")
                                        (progn (require module) 'idle)
                                      (error (error-message-string err))))))))
                 (reverse mega-lazy-modules))))
-
-(defun mega-doctor-heading (text)
-  "Insert TEXT as a section heading."
-  (insert (propertize (concat "\n" text "\n") 'face 'bold)))
-
-(defun mega-doctor-row (label value &optional face)
-  "Insert one row: LABEL, then VALUE, optionally in FACE."
-  (insert (format "  %-28s %s\n" label
-                  (if face (propertize value 'face face) value))))
-
-(defun mega-doctor-check (label ok good bad)
-  "Insert a row for LABEL saying GOOD if OK is non-nil, else BAD.
-Returns OK, so callers can count problems."
-  (mega-doctor-row label (if ok good bad) (if ok 'success 'error))
-  ok)
 
 (defun mega-doctor--private-p (dir)
   "Non-nil if DIR exists and only its owner can enter it."

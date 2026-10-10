@@ -36,7 +36,7 @@
 (require 'mega-exec)
 (require 'mega-pick)
 
-(declare-function mega-project-root "mega-project")
+(require 'mega-project)
 (declare-function grep-mode "grep")
 
 (defcustom mega-search-backend 'auto
@@ -73,6 +73,9 @@
 
 (defvar mega-search--directory nil "Where the active search runs.")
 (defvar mega-search--backend nil "The program the active search uses.")
+(defvar mega-search--left-out nil
+  "Directory names the active search passes over, unless it includes ignored files.
+Set for a project without version control: see `mega-project-left-out'.")
 (defvar mega-search--export nil "Set by `mega-search-export' as it leaves the prompt.")
 
 ;;;; Choosing the program
@@ -126,7 +129,12 @@ list: PATTERN and PATHS are passed as they are, never through a shell."
          "--max-columns=300" "--max-columns-preview"
          ,(if ignore-case "--ignore-case" "--case-sensitive")
          ,@(when mega-search-hidden '("--hidden" "--glob=!.git"))
-         ,@(when mega-search-ignored '("--no-ignore"))
+         ;; Without a repository ripgrep reads no .gitignore unless told to.
+         ,@(if mega-search-ignored
+               '("--no-ignore")
+             (cons "--no-require-git"
+                   (mapcar (lambda (name) (concat "--glob=!" name "/"))
+                           mega-search--left-out)))
          ,@(when mega-search-literal '("--fixed-strings"))
          ,@(when mega-search-word '("--word-regexp"))
          ,@(mapcar (lambda (path) (concat "--glob=" path)) paths)
@@ -148,9 +156,13 @@ list: PATTERN and PATHS are passed as they are, never through a shell."
          ,(if mega-search-literal "--fixed-strings" "--perl-regexp")
          ,@(when ignore-case '("--ignore-case"))
          ,@(unless mega-search-hidden '("--exclude=.*" "--exclude-dir=.*"))
+         ,@(unless mega-search-ignored
+             (mapcar (lambda (name) (concat "--exclude-dir=" name))
+                     mega-search--left-out))
          ,@(when mega-search-word '("--word-regexp"))
          ,(concat "--regexp=" pattern)
-         ,@(or paths '(".")))))))
+         ;; A path is a path, even one that begins with a dash.
+         "--" ,@(or paths '(".")))))))
 
 ;;;; Running it
 
@@ -314,10 +326,10 @@ makes them editable in place."
   "Search the project as you type, starting from INITIAL.
 See the Commentary of mega-search.el for the keys of the prompt."
   (interactive)
-  (let* ((directory (file-name-as-directory
-                     (or (mega-project-root) default-directory)))
+  (let* ((directory (mega-project-directory))
          (mega-search--directory directory)
          (mega-search--backend (mega-search-backend-for directory))
+         (mega-search--left-out (mega-project-left-out directory))
          (mega-search--export nil))
     (unless mega-search--backend
       (user-error "No search program found: install ripgrep, or use this in a git repository"))

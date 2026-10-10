@@ -15,6 +15,9 @@
 
 ;;; Code:
 
+(defvar mega-terminal-probe--waited 0
+  "Seconds this probe has spent waiting for something to be made.")
+
 (defvar mega-terminal-probe-problems nil
   "What the probe found wrong.")
 
@@ -172,7 +175,7 @@ must stay out of the way."
          (b (expand-file-name "b.txt" dir))
          ;; The sandbox is under the temporary directory, which workspaces
          ;; normally leave out.
-         (temporary-file-directory "/nonexistent-temporary-directory/"))
+         (mega-temporary-directories nil))
     (with-temp-file a (insert "alpha\nbeta\n"))
     (with-temp-file b (insert "gamma\ndelta\n"))
     (condition-case err
@@ -212,6 +215,61 @@ Only a real session can tell: a batch Emacs is killed by such a write."
            "a program that refused its input was reported as a success")))
     (error (mega-terminal-probe--problem
             "a program that stopped reading raised %S" err))))
+
+(defun mega-terminal-probe--untrusted ()
+  "Check, in a live session, that opening a file does not run its project.
+A C file beside a Makefile is the sharpest case: Emacs's own checker for
+C runs `make'.  The Makefile here leaves a mark if it is ever read."
+  (declare-function mega-trust-project "mega-trust")
+  (declare-function flymake-start "flymake")
+  (defvar mega-trust-held)
+  (defvar flymake-mode)
+  (let* ((dir (file-name-as-directory
+               (make-temp-file (expand-file-name "hostile-" (getenv "MEGA_TEST_SANDBOX")) t)))
+         (source (expand-file-name "main.c" dir))
+         (ran (lambda () (directory-files dir nil "\\`ran-")))
+         (wait (lambda (seconds)
+                 (let ((deadline (+ (float-time) seconds)))
+                   (while (and (not (funcall ran)) (< (float-time) deadline))
+                     (accept-process-output nil 0.1))))))
+    (with-temp-file (expand-file-name "Makefile" dir)
+      (insert "$(shell touch ran-make-parse)\ncheck-syntax:\n\ttouch ran-make-target\n"))
+    (with-temp-file source (insert "int main(void) { return 0; }\n"))
+    (condition-case err
+        (save-window-excursion
+          ;; Emacs would offer to build a parser for C here, and wait for an
+          ;; answer nobody is there to give.
+          (defvar treesit-auto-install-grammar)
+          (let ((treesit-auto-install-grammar nil))
+            (find-file source))
+          (redisplay t)
+          ;; If a checker were on, this is the moment it would start.
+          (when (bound-and-true-p flymake-mode)
+            (flymake-start)
+            (funcall wait 3))
+          (when (funcall ran)
+            (mega-terminal-probe--problem
+             "opening a C file in an untrusted project ran make: %S" (funcall ran)))
+          (unless (bound-and-true-p mega-trust-held)
+            (mega-terminal-probe--problem "the buffer does not say it is untrusted"))
+          (unless (string-match-p "untrusted" (mega-terminal-probe--modeline))
+            (mega-terminal-probe--problem "the modeline does not say untrusted: %S"
+                                          (mega-terminal-probe--modeline)))
+          ;; The contrast, which is what shows the check above can fail:
+          ;; trusted, the very same buffer is checked, and make does run.
+          (mega-trust-project)
+          (unless (bound-and-true-p flymake-mode)
+            (mega-terminal-probe--problem "trusting the project did not start its checks"))
+          (when (bound-and-true-p flymake-mode)
+            (flymake-start)
+            (funcall wait 10))
+          (unless (funcall ran)
+            (mega-terminal-probe--problem "a trusted C file was not checked with make"))
+          (when (string-match-p "untrusted" (mega-terminal-probe--modeline))
+            (mega-terminal-probe--problem "the modeline still says untrusted"))
+          (set-buffer-modified-p nil)
+          (kill-buffer (current-buffer)))
+      (error (mega-terminal-probe--problem "the trust check failed: %S" err)))))
 
 (defun mega-terminal-probe--undo ()
   "Check the undo tree on the live terminal.
@@ -269,10 +327,52 @@ looks for the picture itself in what the terminal was sent."
         (kill-buffer "mega-probe-undo"))
     (error (mega-terminal-probe--problem "the undo tree failed: %S" err))))
 
+(defun mega-terminal-probe--form ()
+  "Check that MEGA's Lisp runs in the form MEGA_TEST_FORM names.
+\"compiled\": from a compiled copy that was there.  \"make\": from source,
+there being no copy, and this session has made one for the next.
+\"native\", and \"native-wait\" once Emacs has had the time: from that
+copy as native code.  Anything else: from source."
+  (defvar mega-compiled-p)
+  (defvar mega-compiled-dir)
+  (defvar mega-compile--made)
+  (declare-function mega-compile--failure "mega-compile")
+  (declare-function mega-compile-forms "mega-compile")
+  (let ((compiled (not (interpreted-function-p (symbol-function 'mega-trust-p)))))
+    (pcase (getenv "MEGA_TEST_FORM")
+      ((or "native" "native-wait")
+       (pcase-let ((`(,native ,byte ,_source) (mega-compile-forms)))
+         (unless (and mega-compiled-p
+                      (native-comp-function-p (symbol-function 'mega-trust-p))
+                      (native-comp-function-p (symbol-function 'mega-complete--post-command))
+                      (> native (* 5 byte)))
+           (mega-terminal-probe--problem
+            "MEGA's Lisp was to run as native code: %d functions do, %d are only compiled%s"
+            native byte
+            (if (> mega-terminal-probe--waited 0)
+                (format ", after %d seconds" mega-terminal-probe--waited)
+              "")))))
+      ("compiled"
+       (unless (and mega-compiled-p compiled)
+         (mega-terminal-probe--problem
+          "the compiled copy was to be loaded, and the source was")))
+      ("make"
+       (when (or mega-compiled-p compiled)
+         (mega-terminal-probe--problem "there was a compiled copy before any was made"))
+       (unless (and mega-compile--made
+                    (file-exists-p (expand-file-name "fingerprint" mega-compiled-dir)))
+         (mega-terminal-probe--problem
+          "the session did not make its compiled copy: %S" (mega-compile--failure))))
+      (_
+       (when (or mega-compiled-p compiled)
+         (mega-terminal-probe--problem
+          "the source was to be loaded, and a compiled copy was"))))))
+
 (defun mega-terminal-probe--supported ()
   "Check a session in which MEGA is expected to be fully configured."
   ;; First, before anything below changes what is on screen.
   (mega-terminal-probe--home)
+  (mega-terminal-probe--form)
   (unless (bound-and-true-p mega-supported-p)
     (mega-terminal-probe--problem "MEGA refused this Emacs"))
   (when (bound-and-true-p mega-module-failures)
@@ -340,6 +440,7 @@ looks for the picture itself in what the terminal was sent."
   (mega-terminal-probe--completion)
   (mega-terminal-probe--undo)
   (mega-terminal-probe--processes)
+  (mega-terminal-probe--untrusted)
   (when (and (equal (getenv "MEGA_TEST_LAUNCHER") "chemacs")
              (not (featurep 'chemacs)))
     (mega-terminal-probe--problem "chemacs was expected to have started this session")))
@@ -386,13 +487,50 @@ looks for the picture itself in what the terminal was sent."
     (insert (format "verdict=%s\n" (if mega-terminal-probe-problems "bad" "ok"))))
   (kill-emacs (if mega-terminal-probe-problems 1 0)))
 
+;; A session makes a compiled copy of MEGA's Lisp once it has sat idle for a
+;; few seconds.  One run of this probe is about exactly that; in the others
+;; it would be another Emacs starting in the middle of what they look at.
+(defvar mega-compile)
+(when (and (boundp 'mega-compile)
+           (not (equal (getenv "MEGA_TEST_FORM") "make")))
+  (setq mega-compile nil))
+
+(defun mega-terminal-probe--when-made ()
+  "Report once the session has made its compiled copy, or has had its time."
+  (setq mega-terminal-probe--waited (1+ mega-terminal-probe--waited))
+  (when (or (bound-and-true-p mega-compile--made)
+            (and (fboundp 'mega-compile--failure) (mega-compile--failure))
+            (> mega-terminal-probe--waited 90))
+    (cancel-function-timers #'mega-terminal-probe--when-made)
+    (mega-terminal-probe--report)))
+
+(defun mega-terminal-probe--when-native ()
+  "Report once Emacs has no more of what it loaded left to compile.
+That is Emacs's own doing: a compiled file it loads, it compiles to
+native code in the background.  The probe only waits for it."
+  (setq mega-terminal-probe--waited (1+ mega-terminal-probe--waited))
+  (when (or (> mega-terminal-probe--waited 300)
+            (and (> mega-terminal-probe--waited 3)
+                 (not (bound-and-true-p comp-files-queue))
+                 (or (not (boundp 'comp-async-compilations))
+                     (zerop (hash-table-count (symbol-value 'comp-async-compilations))))))
+    (cancel-function-timers #'mega-terminal-probe--when-native)
+    (mega-terminal-probe--report)))
+
 ;; Not during startup, but once Emacs is idle, which is when the first screen
 ;; is up and it waits for a key.  Only then has the work MEGA puts off until
 ;; after startup been done; a probe run from the startup hook itself could
 ;; never see it, because Emacs is not idle while a hook runs.
+;;
+;; The run that waits for the copy looks once a second and does nothing in
+;; between: a timer that ticks does not end Emacs's idleness, a probe that
+;; sat waiting in a loop would, and the copy would then never be started.
 (add-hook 'emacs-startup-hook
           (lambda ()
-            (run-with-idle-timer 0.5 nil #'mega-terminal-probe--report))
+            (pcase (getenv "MEGA_TEST_FORM")
+              ("make" (run-with-timer 1 1 #'mega-terminal-probe--when-made))
+              ("native-wait" (run-with-timer 1 1 #'mega-terminal-probe--when-native))
+              (_ (run-with-idle-timer 0.5 nil #'mega-terminal-probe--report))))
           100)
 
 ;;; mega-terminal-probe.el ends here

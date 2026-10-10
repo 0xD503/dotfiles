@@ -54,6 +54,10 @@
                   "~/.netrc" "~/.authinfo" "~/.npmrc" "~/.aws/credentials"
                   "/home/u/app/secrets.yaml" "/home/u/app/credentials.json"
                   "/home/u/app/.secrets"
+                  "~/.git-credentials" "~/.pgpass" "~/.kube/config"
+                  "~/.docker/config.json" "/home/u/infra/prod.tfvars"
+                  "/home/u/infra/prod.tfvars.json" "/srv/www/.htpasswd"
+                  "/home/u/cert.p12" "/home/u/cert.pfx"
                   "/dev/shm/pass.abc/mail.txt" "/run/user/1000/tmp/sudoedit"))
     (should (mega-private-file-p file))))
 
@@ -62,8 +66,60 @@
                   "/home/u/src/keymap.c" "/home/u/src/monkey.py"
                   "/home/u/src/secret_santa.py" "/home/u/app/.environment"
                   "/home/u/app/credentials.rs" "/run/media/u/usb/notes.txt"
-                  "/home/u/app/environment.yaml"))
+                  "/home/u/app/environment.yaml" "/home/u/.kube/cache/x"
+                  "/home/u/.docker/config.json.md" "/home/u/src/config.json"
+                  "/home/u/src/tfvars.rs" "/home/u/src/keyboard.c"))
     (should-not (mega-private-file-p file))))
+
+(ert-deftest mega-lib-a-link-is-as-private-as-what-it-leads-to ()
+  "A file called `notes' that is a link into ~/.ssh is not an ordinary file."
+  (mega-test-with-directory dir
+    (let* ((vault (expand-file-name ".ssh/" dir))
+           (real (mega-test-write (expand-file-name "config" vault) "Host x" ""))
+           (link (expand-file-name "notes" dir))
+           (plain (mega-test-write (expand-file-name "plain" dir) "x" ""))
+           (plain-link (expand-file-name "plain-link" dir)))
+      (make-symbolic-link real link)
+      (make-symbolic-link plain plain-link)
+      (should (mega-private-file-p link))
+      (should (mega-forgettable-file-p link))
+      (should-not (mega-private-file-p plain-link))
+      ;; A whole directory that is a link, too.
+      (let ((linked-directory (expand-file-name "work" dir)))
+        (make-symbolic-link vault linked-directory)
+        (should (mega-private-file-p (expand-file-name "config" linked-directory)))))))
+
+(ert-deftest mega-lib-remote-names-are-judged-without-a-round-trip ()
+  (cl-letf (((symbol-function 'file-truename)
+             (lambda (&rest _) (error "A remote file was asked about"))))
+    (should (mega-private-file-p "/ssh:host:/home/u/.ssh/config"))
+    (should-not (mega-private-file-p "/ssh:host:/home/u/src/main.rs"))))
+
+(ert-deftest mega-lib-temporary-places-are-the-ones-the-machine-uses ()
+  (dolist (directory (list "/tmp/" "/var/tmp/" temporary-file-directory))
+    (should (member (file-name-as-directory directory) mega-test-temporary-directories)))
+  (when-let* ((own (getenv "TMPDIR")))
+    (should (member (file-name-as-directory own) mega-test-temporary-directories)))
+  (let ((mega-temporary-directories '("/tmp/" "/scratch")))
+    (should (mega-temporary-file-p "/tmp/a/b.txt"))
+    (should (mega-temporary-file-p "/scratch/b.txt"))
+    (should-not (mega-temporary-file-p "/scratchpad/b.txt"))
+    (should-not (mega-temporary-file-p "/home/u/tmp/b.txt"))))
+
+(ert-deftest mega-lib-what-is-not-to-be-remembered ()
+  (let ((mega-temporary-directories mega-test-temporary-directories))
+    (dolist (file (list "/home/u/.ssh/config" "/tmp/x.c"
+                        "/home/u/repo/.git/COMMIT_EDITMSG"
+                        "/home/u/repo/.git/MERGE_MSG"
+                        "/home/u/repo/.git/worktrees/w/TAG_EDITMSG"
+                        "/home/u/repo/.git/rebase-merge/git-rebase-todo"
+                        "/home/u/repo/.git/addp-hunk-edit.diff"
+                        (expand-file-name "undo/abc" mega-state-dir)
+                        (expand-file-name "backup/x" mega-cache-dir)))
+      (should (mega-forgettable-file-p file))))
+  (dolist (file '("/home/u/src/main.rs" "/home/u/docs/COMMIT_EDITMSG.md"
+                  "/home/u/src/git-rebase-todo.el" "/home/u/README"))
+    (should-not (mega-forgettable-file-p file))))
 
 (ert-deftest mega-lib-private-list-is-extensible ()
   (let ((mega-private-file-regexps (cons "/vault/" mega-private-file-regexps)))

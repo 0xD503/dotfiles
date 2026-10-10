@@ -51,6 +51,51 @@
     (should (memq 'mega-popup (ensure-list (get-text-property 1 'face))))
     (should (memq 'mega-popup-selected (ensure-list (get-text-property 8 'face))))))
 
+;;;; Which source is asked
+
+(ert-deftest mega-complete-a-source-with-nothing-to-offer-lets-the-next-one-speak ()
+  "One that says it need not be the only source is passed over when it has
+nothing for what is typed; otherwise words from open buffers would never
+be offered where a language has a completion function of its own."
+  (with-temp-buffer
+    (insert "meg")
+    (let* ((bounds (lambda () (list (point-min) (point-max))))
+           (empty (lambda () (append (funcall bounds) '(("zebra" "yak") :exclusive no))))
+           (words (lambda () (append (funcall bounds) '(("mega" "megabyte"))))))
+      (setq-local completion-at-point-functions (list empty words))
+      (should (equal (nth 2 (mega-complete--capf)) '("mega" "megabyte")))
+      ;; When it does have something, it is the one that answers.
+      (erase-buffer)
+      (insert "ze")
+      (should (equal (nth 2 (mega-complete--capf)) '("zebra" "yak")))
+      ;; One that insists on being the only source is taken at its word.
+      (erase-buffer)
+      (insert "meg")
+      (setq-local completion-at-point-functions
+                  (list (lambda () (append (funcall bounds) '(("zebra")))) words))
+      (should (equal (nth 2 (mega-complete--capf)) '("zebra"))))))
+
+(ert-deftest mega-complete-an-error-closes-the-menu-instead-of-breaking-it ()
+  "Emacs drops a function from the hook that runs after every key the
+first time it signals.  The menu must not be that function."
+  (with-temp-buffer
+    (let ((closed nil) (said nil)
+          (mega-complete--active t)
+          (mega-complete--buffer (current-buffer))
+          (mega-complete--start (copy-marker (point-min)))
+          (this-command 'self-insert-command))
+      (cl-letf (((symbol-function 'mega-complete--refresh)
+                 (lambda () (error "A completion table blew up")))
+                ((symbol-function 'mega-complete-close)
+                 (lambda () (setq closed t mega-complete--active nil)))
+                ((symbol-function 'message)
+                 (lambda (format &rest arguments)
+                   (setq said (apply #'format-message format arguments)))))
+        ;; Called as the hook calls it: nothing escapes.
+        (mega-complete--post-command)
+        (should closed)
+        (should (string-match-p "blew up" said))))))
+
 ;;;; The menu's model
 
 (ert-deftest mega-complete-moving-through-the-candidates ()

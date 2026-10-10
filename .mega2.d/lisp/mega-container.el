@@ -12,7 +12,13 @@
 ;;   C-c k d   detach: go back to the tools of this machine
 ;;   C-c k s   a shell inside the container
 ;;   C-c k i   what the container is and what runs in it
-;;   C-c k x   stop the container            C-c k r   rebuild it
+;;   C-c k x   stop the container, or give up starting it
+;;   C-c k r   rebuild it
+;;
+;; Starting can take minutes: an image is fetched, dependencies are
+;; installed.  It happens in the background.  A window shows each command
+;; and what it prints, Emacs stays yours meanwhile, and nothing is cut short
+;; by a time limit; `C-c k x' gives up.
 ;;
 ;; How the container gets made:
 ;;
@@ -22,15 +28,20 @@
 ;; * Otherwise MEGA does it itself with podman or docker, for the part of the
 ;;   specification that needs nothing else: an image, mounts, environment,
 ;;   run arguments, users, ports and the lifecycle commands.  A file that
-;;   asks for more — an image built from a Dockerfile, Features, Compose — is
-;;   refused, naming what it asked for, rather than half-started.
+;;   asks for more is refused, naming what it asked for, rather than
+;;   half-started: that goes for what needs the official command (an image
+;;   built from a Dockerfile, Features, Compose) and for anything MEGA does
+;;   not know, since a setting it would silently ignore might be the one
+;;   that mattered.
 ;;
 ;; Safety and security:
 ;;
 ;; * A devcontainer.json can name commands to run, one of them on this
-;;   machine before the container exists.  MEGA shows what the file would
-;;   run and asks, once per version of the file: change the file and it asks
-;;   again.  The project must be trusted as well (mega-trust.el).
+;;   machine before the container exists, and directories of this machine to
+;;   hand to the container.  MEGA shows all of it, as it will really be
+;;   passed on, and asks, once per version of the file and of the files it
+;;   names: change any of them and it asks again.  The project must be
+;;   trusted as well (mega-trust.el).
 ;;
 ;; * Stopping or rebuilding a container asks first.  Nothing here deletes a
 ;;   volume.
@@ -43,12 +54,10 @@
 (require 'mega-lib)
 (require 'mega-exec)
 (require 'mega-trust)
+(require 'mega-project)
 (require 'subr-x)
 (require 'cl-lib)
 
-(declare-function mega-project-root "mega-project")
-(declare-function eglot-uri-to-path "eglot")
-(declare-function eglot-path-to-uri "eglot")
 (declare-function make-term "term")
 (declare-function term-char-mode "term")
 
@@ -62,13 +71,22 @@
 (defconst mega-container-approved-file (mega-state "containers-approved.eld")
   "Which devcontainer.json files, in which version, you agreed to run.")
 
+(defconst mega-container-log-buffer "*mega-container*"
+  "The buffer that shows a container being started, and what is asked first.")
+
 (defvar mega-container--attached nil
   "The containers in use: an alist of (ROOT . PLIST).
 PLIST has :id, :engine, :user, :folder (the workspace inside), :name and
 :env (extra environment for what runs inside, a list of \"K=V\").")
 
+(defvar mega-container--starting nil
+  "The containers being started: an alist of (ROOT . PROCESS).
+PROCESS is the step that is running now.")
+
 (defvar mega-container--found (make-hash-table :test #'equal)
   "Which programs exist in which container: (ID . PROGRAM) to t or `no'.")
+
+(add-hook 'mega-forget-functions (lambda () (clrhash mega-container--found)))
 
 ;;;; Reading devcontainer.json
 
@@ -131,15 +149,35 @@ Arrays become lists, false becomes `:false', null becomes nil."
                         #'string<)))))
 
 ;;;; From the file to a plan
+;;
+;; Every key of a devcontainer.json falls into one of four sets.  Which set
+;; decides what MEGA does with it, and nothing is left to chance: a key in
+;; none of the first three is in the fourth.
+
+(defconst mega-container-handled-keys
+  '(name image workspaceFolder workspaceMount mounts runArgs capAdd securityOpt
+    privileged init containerEnv remoteEnv containerUser remoteUser forwardPorts
+    initializeCommand onCreateCommand updateContentCommand postCreateCommand
+    postStartCommand postAttachCommand)
+  "What MEGA acts on itself.")
+
+(defconst mega-container-harmless-keys
+  '($schema customizations shutdownAction hostRequirements waitFor userEnvProbe
+    portsAttributes otherPortsAttributes updateRemoteUserUID overrideCommand)
+  "What MEGA does not act on and need not: settings for other editors, or
+about things MEGA does not do.")
 
 (defconst mega-container-unsupported-keys
-  '(build dockerFile features dockerComposeFile)
+  '(build dockerFile context features overrideFeatureInstallOrder
+    dockerComposeFile service runServices appPort)
   "What MEGA cannot do without the official devcontainer command.")
 
 (defun mega-container--substitute (value root folder)
   "Expand the ${...} variables of the specification in VALUE.
 ROOT is the project on this machine, FOLDER its place in the container.
-VALUE may be a string, a list or an alist; anything else is returned."
+VALUE may be a string, a list or an alist; anything else is returned.
+${containerEnv:...} is left for when the container exists; see
+`mega-container--resolve-environment'."
   (cond
    ((stringp value)
     (replace-regexp-in-string
@@ -166,10 +204,44 @@ VALUE may be a string, a list or an alist; anything else is returned."
           (mega-container--substitute (cdr value) root folder)))
    (t value)))
 
+(defun mega-container--mount (mount)
+  "MOUNT from devcontainer.json as the container program takes it, or nil.
+The specification allows a string, passed on as it is, or an object
+with source, target and type."
+  (cond ((stringp mount) mount)
+        ((and (consp mount) (alist-get 'target mount))
+         (string-join
+          (delq nil
+                (list (format "type=%s" (or (alist-get 'type mount) "volume"))
+                      (and (alist-get 'source mount)
+                           (format "source=%s" (alist-get 'source mount)))
+                      (format "target=%s" (alist-get 'target mount))))
+          ","))))
+
+(defun mega-container--port (port)
+  "PORT from `forwardPorts' as a number in a string, or nil.
+\"host:port\" names a service of a Compose file, which MEGA does not do."
+  (cond ((integerp port) (number-to-string port))
+        ((and (stringp port) (string-match-p "\\`[0-9]+\\'" port)) port)))
+
+(defun mega-container-referenced-files (config directory)
+  "The files CONFIG, a parsed devcontainer.json in DIRECTORY, builds from.
+What they say runs when the container is made, so agreeing to the one
+file is agreeing to these as well."
+  (let* ((build (alist-get 'build config))
+         (compose (alist-get 'dockerComposeFile config))
+         (names (append (list (alist-get 'dockerFile config)
+                              (and (consp build) (alist-get 'dockerfile build)))
+                        (if (stringp compose) (list compose) compose))))
+    (seq-filter #'file-readable-p
+                (mapcar (lambda (name) (expand-file-name name directory))
+                        (seq-filter #'stringp names)))))
+
 (defun mega-container-plan (config root)
   "Turn CONFIG, a parsed devcontainer.json, into a plan for the project at ROOT.
 The plan is a plist; see the keys it is built from below.  :unsupported
-lists what the file asks for that MEGA cannot do by itself."
+lists, as strings, what the file asks for that MEGA cannot do by itself,
+and :unknown the keys it does not know at all."
   (let* ((root (file-name-as-directory (expand-file-name root)))
          (base (file-name-nondirectory (directory-file-name root)))
          (folder (or (alist-get 'workspaceFolder config)
@@ -177,7 +249,12 @@ lists what the file asks for that MEGA cannot do by itself."
          (folder (mega-container--substitute folder root folder))
          (get (lambda (key)
                 (mega-container--substitute (alist-get key config) root folder)))
-         (list-of (lambda (value) (if (stringp value) (list value) value))))
+         (list-of (lambda (value) (if (listp value) value (list value))))
+         (mounts (funcall list-of (funcall get 'mounts)))
+         (ports (funcall list-of (funcall get 'forwardPorts)))
+         (pairs (lambda (key)
+                  (mapcar (lambda (pair) (format "%s=%s" (car pair) (cdr pair)))
+                          (funcall get key)))))
     (list :name (or (funcall get 'name) base)
           :root root
           :image (funcall get 'image)
@@ -185,24 +262,39 @@ lists what the file asks for that MEGA cannot do by itself."
           :workspace-mount (or (funcall get 'workspaceMount)
                                (format "type=bind,source=%s,target=%s"
                                        (directory-file-name root) folder))
-          :mounts (seq-filter #'stringp (funcall get 'mounts))
+          :mounts (delq nil (mapcar #'mega-container--mount mounts))
           :run-args (funcall get 'runArgs)
           :cap-add (funcall get 'capAdd)
           :security-opt (funcall get 'securityOpt)
-          :env (mapcar (lambda (pair) (format "%s=%s" (car pair) (cdr pair)))
-                       (funcall get 'containerEnv))
-          :remote-env (mapcar (lambda (pair) (format "%s=%s" (car pair) (cdr pair)))
-                              (funcall get 'remoteEnv))
+          :privileged (eq (alist-get 'privileged config) t)
+          :init (eq (alist-get 'init config) t)
+          :env (funcall pairs 'containerEnv)
+          :remote-env (funcall pairs 'remoteEnv)
           :container-user (funcall get 'containerUser)
           :user (or (funcall get 'remoteUser) (funcall get 'containerUser))
-          :ports (mapcar (lambda (port) (format "%s" port))
-                         (funcall list-of (funcall get 'forwardPorts)))
-          :initialize (funcall get 'initializeCommand)
+          :ports (delq nil (mapcar #'mega-container--port ports))
+          ;; One command, kept as a list of one like the others.
+          :initialize (delq nil (list (funcall get 'initializeCommand)))
           :created (delq nil (mapcar get '(onCreateCommand updateContentCommand
                                            postCreateCommand)))
           :started (delq nil (mapcar get '(postStartCommand)))
-          :unsupported (seq-filter (lambda (key) (assq key config))
-                                   mega-container-unsupported-keys))))
+          :attached (delq nil (mapcar get '(postAttachCommand)))
+          :unsupported
+          (append
+           (mapcar #'symbol-name
+                   (seq-filter (lambda (key) (assq key config))
+                               mega-container-unsupported-keys))
+           (mapcar (lambda (mount) (format "mounts entry %S" mount))
+                   (seq-remove #'mega-container--mount mounts))
+           (mapcar (lambda (port) (format "forwardPorts entry %S" port))
+                   (seq-remove #'mega-container--port ports)))
+          :unknown
+          (mapcar #'symbol-name
+                  (seq-remove (lambda (key)
+                                (or (memq key mega-container-handled-keys)
+                                    (memq key mega-container-harmless-keys)
+                                    (memq key mega-container-unsupported-keys)))
+                              (mapcar #'car config))))))
 
 (defun mega-container-run-arguments (plan)
   "The arguments of `ENGINE run' that create the container PLAN describes."
@@ -216,6 +308,8 @@ lists what the file asks for that MEGA cannot do by itself."
    (mapcan (lambda (cap) (list "--cap-add" cap)) (plist-get plan :cap-add))
    (mapcan (lambda (option) (list "--security-opt" option))
            (plist-get plan :security-opt))
+   (and (plist-get plan :privileged) (list "--privileged"))
+   (and (plist-get plan :init) (list "--init"))
    (mapcan (lambda (env) (list "--env" env)) (plist-get plan :env))
    (mapcan (lambda (port) (list "--publish" (format "%s:%s" port port)))
            (plist-get plan :ports))
@@ -240,6 +334,10 @@ list of words, which runs directly."
       (delq nil (mapcar (lambda (pair) (mega-container--command (cdr pair))) value))
     (delq nil (list (mega-container--command value)))))
 
+(defun mega-container--all-commands (plan key)
+  "The commands PLAN holds under KEY, each an argument list."
+  (mapcan #'mega-container--commands (copy-sequence (plist-get plan key))))
+
 ;;;; Agreeing to run what the file says
 
 (defun mega-container--approved ()
@@ -254,64 +352,96 @@ list of words, which runs directly."
                           data)
              data)))))
 
-(defun mega-container--hash (file)
-  "The fingerprint of FILE's contents."
-  (with-temp-buffer
-    (insert-file-contents-literally file)
-    (secure-hash 'sha256 (current-buffer))))
+(defun mega-container--hash (file &optional others)
+  "The fingerprint of FILE's contents, and of those of OTHERS with it."
+  (secure-hash
+   'sha256
+   (mapconcat (lambda (each)
+                (with-temp-buffer
+                  (insert-file-contents-literally each)
+                  (concat (file-name-nondirectory each) ":"
+                          (secure-hash 'sha256 (current-buffer)))))
+              (cons file others) "\n")))
 
-(defun mega-container-summary (plan)
-  "Describe, for the user, everything PLAN would run and mount."
-  (let ((lines (list (format "Container for %s" (abbreviate-file-name (plist-get plan :root)))
-                     ""
-                     (format "  image          %s" (or (plist-get plan :image) "(none)"))
-                     (format "  workspace      %s  ->  %s"
-                             (abbreviate-file-name (plist-get plan :root))
-                             (plist-get plan :folder)))))
-    (cl-flet ((add (label values)
+(defun mega-container-summary (plan &optional cli others)
+  "Describe, for the user, everything PLAN would run and mount.
+CLI non-nil means the official command will make the container, and
+OTHERS are the files it builds from besides the devcontainer.json."
+  (let ((lines nil))
+    (cl-flet ((say (line) (push line lines))
+              (add (label values)
                 (dolist (value values)
                   (push (format "  %-14s %s" label value) lines)
                   (setq label ""))))
-      (when-let* ((initialize (mega-container--commands (plist-get plan :initialize))))
-        (push "" lines)
-        (push "  RUNS ON THIS MACHINE, before the container exists:" lines)
+      (say (format "Container for %s" (abbreviate-file-name (plist-get plan :root))))
+      (say "")
+      (add "image" (list (or (plist-get plan :image) "(none named)")))
+      ;; As it is passed on, not as it is usually: a file may mount
+      ;; something quite different from the project in its place.
+      (add "workspace" (list (plist-get plan :workspace-mount)))
+      (add "works in" (list (plist-get plan :folder)))
+      (when (plist-get plan :privileged)
+        (say "")
+        (say "  PRIVILEGED: the container may do anything on this machine that you may."))
+      (when-let* ((initialize (mega-container--all-commands plan :initialize)))
+        (say "")
+        (say "  RUNS ON THIS MACHINE, before the container exists:")
         (add "" (mapcar (lambda (command) (string-join command " ")) initialize))
-        (push "" lines))
+        (say ""))
       (add "runs inside" (mapcar (lambda (command) (string-join command " "))
-                                 (mapcan #'mega-container--commands
-                                         (append (plist-get plan :created)
-                                                 (plist-get plan :started)))))
+                                 (append (mega-container--all-commands plan :created)
+                                         (mega-container--all-commands plan :started)
+                                         (mega-container--all-commands plan :attached))))
       (add "mounts" (plist-get plan :mounts))
       (add "run arguments" (plist-get plan :run-args))
       (add "capabilities" (plist-get plan :cap-add))
       (add "security" (plist-get plan :security-opt))
       (add "environment" (append (plist-get plan :env) (plist-get plan :remote-env)))
       (add "ports" (plist-get plan :ports))
-      (add "user" (delq nil (list (plist-get plan :user)))))
+      (add "user" (delq nil (list (plist-get plan :user))))
+      (when-let* ((beyond (append (plist-get plan :unsupported) (plist-get plan :unknown))))
+        (say "")
+        (say (if cli
+                 "  ALSO IN THE FILE, and acted on by the devcontainer command, not shown here:"
+               "  ALSO IN THE FILE, which MEGA cannot do by itself:"))
+        (add "" beyond))
+      (when others
+        (say "")
+        (say "  BUILT FROM these files as well; what they say runs too:")
+        (add "" (mapcar #'abbreviate-file-name others))))
     (string-join (nreverse lines) "\n")))
 
-(defun mega-container-approve (file plan)
+(defun mega-container--show (text)
+  "Show TEXT in the container buffer, replacing what was there."
+  (with-current-buffer (get-buffer-create mega-container-log-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert text "\n"))
+    (special-mode)
+    (goto-char (point-min))
+    (current-buffer)))
+
+(defun mega-container-approve (file plan &optional cli)
   "Return non-nil if the user agrees to run what FILE, parsed as PLAN, says.
-Asked once per version of the file.  A batch Emacs is never asked, and
+Asked once per version of the file and of the files it builds from.  CLI
+is as in `mega-container-summary'.  A batch Emacs is never asked, and
 never agrees."
-  (let ((hash (mega-container--hash file))
-        (approved (mega-container--approved)))
+  (let* ((others (mega-container-referenced-files
+                  (mega-container-read file) (file-name-directory file)))
+         (hash (mega-container--hash file others))
+         (approved (mega-container--approved)))
     (or (equal (cdr (assoc file approved)) hash)
         (and (not noninteractive)
              (save-window-excursion
-               (with-current-buffer (get-buffer-create "*mega-container*")
-                 (let ((inhibit-read-only t))
-                   (erase-buffer)
-                   (insert (mega-container-summary plan) "\n"))
-                 (special-mode)
-                 (goto-char (point-min))
-                 (pop-to-buffer (current-buffer)))
+               (pop-to-buffer (mega-container--show
+                               (mega-container-summary plan cli others)))
                (yes-or-no-p (format "Start this container, as %s describes? "
                                     (abbreviate-file-name file))))
-             (progn
+             (let ((temporary (concat mega-container-approved-file ".new")))
                (setf (alist-get file approved nil nil #'equal) hash)
-               (with-temp-file mega-container-approved-file
+               (with-temp-file temporary
                  (prin1 approved (current-buffer)))
+               (rename-file temporary mega-container-approved-file t)
                t)))))
 
 ;;;; Talking to the engine
@@ -324,8 +454,9 @@ never agrees."
 
 (defun mega-container--engine (engine args &rest options)
   "Run ENGINE with ARGS on this machine; return the result of `mega-exec-run'.
-OPTIONS are passed on."
-  (apply #'mega-exec-run engine args :local t options))
+OPTIONS are passed on.  For a question that is answered at once; what
+may take long goes through `mega-container--step'."
+  (apply #'mega-exec-run engine args :here t options))
 
 (defun mega-container--ok (engine args &rest options)
   "Run ENGINE with ARGS and return its trimmed output; signal if it fails."
@@ -348,94 +479,237 @@ so one that another editor started is found too."
                      (list "ps" "--all" "--no-trunc" "--filter"
                            (concat "label=devcontainer.local_folder="
                                    (directory-file-name root))
-                           "--format" "{{.ID}} {{.State}}"))
+                           "--format" "{{.ID}} {{.State}}")
+                     :timeout 30)
                     "\n" t))))
     (when (and line (string-match "\\`\\([^ ]+\\) +\\(.*\\)\\'" line))
       (cons (match-string 1 line) (downcase (match-string 2 line))))))
 
 (defun mega-container--exec-arguments (attached directory)
-  "The `ENGINE exec' arguments, before the program, for ATTACHED and DIRECTORY."
+  "The `ENGINE exec' arguments, before the program, for ATTACHED and DIRECTORY.
+What the caller asks for through `mega-exec-environment' and
+`mega-exec-terminal' is passed on to the container program."
   (append (list "exec" "--interactive")
+          (and mega-exec-terminal (list "--tty"))
           (when-let* ((user (plist-get attached :user)))
             (list "--user" user))
           (list "--workdir" directory)
-          (mapcan (lambda (env) (list "--env" env)) (plist-get attached :env))
+          (mapcan (lambda (env) (list "--env" env))
+                  (append (plist-get attached :env) mega-exec-environment))
           (list (plist-get attached :id))))
 
-(defun mega-container--run-inside (attached commands)
-  "Run each of COMMANDS, argument lists, inside the container ATTACHED."
-  (dolist (command commands)
-    (message "In the container: %s" (string-join command " "))
-    (mega-container--ok (plist-get attached :engine)
-                        (append (mega-container--exec-arguments
-                                 attached (plist-get attached :folder))
-                                command)
-                        :timeout 1800)))
+;;;; Starting, one step after another, in the background
 
-;;;; Starting, natively and through the official command
+(defun mega-container--log (text)
+  "Add TEXT to the container buffer, keeping its windows at the end."
+  (with-current-buffer (get-buffer-create mega-container-log-buffer)
+    (let ((inhibit-read-only t)
+          (follow (seq-filter (lambda (window) (= (window-point window) (point-max)))
+                              (get-buffer-window-list nil nil t))))
+      (save-excursion
+        (goto-char (point-max))
+        (insert text))
+      (dolist (window follow)
+        (set-window-point window (point-max))))))
 
-(defun mega-container--up-native (engine plan)
-  "Start or join the container of PLAN with ENGINE; return what to attach to."
+(defun mega-container--give-up (root reason)
+  "Stop starting the container of ROOT, and say REASON."
+  (setq mega-container--starting (assoc-delete-all root mega-container--starting))
+  (mega-container--log (format "\n%s\n" reason))
+  (message "%s (see %s)" reason mega-container-log-buffer))
+
+(defun mega-container--step (root description program args directory then)
+  "Run PROGRAM with ARGS in DIRECTORY as one step of starting ROOT's container.
+DESCRIPTION is what the log shows for it.  THEN is called with what the
+program printed, if it succeeded; otherwise the start is given up.  The
+program runs on this machine and is not waited for."
+  (when (assoc root mega-container--starting)
+    (mega-container--log (format "\n$ %s\n" description))
+    (let ((printed ""))
+      (setf (alist-get root mega-container--starting nil nil #'equal)
+            (mega-exec-open
+             program args
+             :here t :directory directory :name "mega-container" :coding 'utf-8-unix
+             :filter (lambda (_process text)
+                       (setq printed (concat printed text))
+                       (mega-container--log text))
+             :errors (lambda (_process text) (mega-container--log text))
+             :sentinel
+             (lambda (process)
+               (cond
+                ;; Given up on meanwhile, with `C-c k x': say nothing more.
+                ((not (eq process (cdr (assoc root mega-container--starting)))))
+                ((and (eq (process-status process) 'exit)
+                      (eql (process-exit-status process) 0))
+                 (funcall then printed))
+                (t (mega-container--give-up
+                    root (format "Not started: `%s' failed" description))))))))))
+
+(defun mega-container--steps (root steps then)
+  "Run STEPS for ROOT's container in order, then call THEN.
+Each step is (DESCRIPTION PROGRAM ARGS DIRECTORY)."
+  (if (null steps)
+      (funcall then)
+    (pcase-let ((`(,description ,program ,args ,directory) (car steps)))
+      (mega-container--step root description program args directory
+                            (lambda (_printed)
+                              (mega-container--steps root (cdr steps) then))))))
+
+(defun mega-container--inside (attached commands)
+  "Steps that run each of COMMANDS, argument lists, in the container ATTACHED."
+  (mapcar (lambda (command)
+            (list (concat "in the container: " (string-join command " "))
+                  (plist-get attached :engine)
+                  (append (mega-container--exec-arguments
+                           attached (plist-get attached :folder))
+                          command)
+                  nil))
+          commands))
+
+(defun mega-container--resolve-environment (attached then)
+  "Fill in ${containerEnv:NAME} in the environment of ATTACHED, then call THEN.
+THEN gets ATTACHED with the values the container really has, which are
+only known once it exists: its environment is read from it, once."
+  (let ((root (plist-get attached :root))
+        (needed (seq-some (lambda (setting) (string-search "${containerEnv:" setting))
+                          (plist-get attached :env))))
+    (if (not needed)
+        (funcall then attached)
+      (mega-container--step
+       root "read the container's environment"
+       (plist-get attached :engine)
+       (list "exec" (plist-get attached :id) "env")
+       nil
+       (lambda (printed)
+         (let ((inside (mapcar (lambda (line)
+                                 (let ((at (string-search "=" line)))
+                                   (and at (cons (substring line 0 at)
+                                                 (substring line (1+ at))))))
+                               (split-string printed "\n" t))))
+           (funcall
+            then
+            (plist-put
+             (copy-sequence attached) :env
+             (mapcar (lambda (setting)
+                       (replace-regexp-in-string
+                        "\\${containerEnv:\\([^}:]+\\)\\(?::\\([^}]*\\)\\)?}"
+                        (lambda (match)
+                          (save-match-data
+                            (string-match "containerEnv:\\([^}:]+\\)\\(?::\\([^}]*\\)\\)?}" match)
+                            (or (cdr (assoc (match-string 1 match) inside))
+                                (match-string 2 match)
+                                "")))
+                        setting t t))
+                     (plist-get attached :env))))))))))
+
+(defun mega-container--attach (attached)
+  "Make ATTACHED the container the tools of its project run in."
+  (mega-container--resolve-environment
+   attached
+   (lambda (attached)
+     (let ((root (plist-get attached :root)))
+       (setq mega-container--starting (assoc-delete-all root mega-container--starting))
+       (setf (alist-get root mega-container--attached nil nil #'equal) attached)
+       (let ((say (format "Tools of %s now run in its container (%s)"
+                          (abbreviate-file-name root)
+                          (substring (plist-get attached :id) 0
+                                     (min 12 (length (plist-get attached :id)))))))
+         (mega-container--log (format "\n%s\n" say))
+         (message "%s" say)
+         (force-mode-line-update t))))))
+
+(defun mega-container--refuse-what-it-cannot-do (plan)
+  "Signal an error if PLAN asks for what MEGA cannot do by itself."
   (when-let* ((unsupported (plist-get plan :unsupported)))
     (user-error "This devcontainer.json needs the official `devcontainer' command: MEGA alone cannot do %s"
-                (mapconcat #'symbol-name unsupported ", ")))
+                (string-join unsupported ", ")))
+  (when-let* ((unknown (plist-get plan :unknown)))
+    (user-error "This devcontainer.json has settings MEGA does not know, and will not guess at: %s"
+                (string-join unknown ", ")))
   (unless (plist-get plan :image)
-    (user-error "This devcontainer.json names no image"))
+    (user-error "This devcontainer.json names no image")))
+
+(defun mega-container--up-native (engine plan)
+  "Start or join the container of PLAN with ENGINE, in the background."
   (let* ((root (plist-get plan :root))
          (existing (mega-container-find-existing engine root))
-         (attached (list :engine engine
+         (running (and existing (string-prefix-p "running" (cdr existing))))
+         (attached (list :root root
+                         :engine engine
+                         :id (car existing)
                          :user (plist-get plan :user)
                          :folder (plist-get plan :folder)
                          :name (plist-get plan :name)
                          :env (plist-get plan :remote-env)))
-         (created nil))
+         (inside (lambda (attached key)
+                   (mega-container--inside attached
+                                           (mega-container--all-commands plan key))))
+         (finish (lambda (attached keys)
+                   ;; First, what the container's own environment holds:
+                   ;; the commands below run with the environment the file
+                   ;; asks for, and a PATH built on the container's PATH
+                   ;; finds nothing until that is filled in.
+                   (mega-container--resolve-environment
+                    attached
+                    (lambda (attached)
+                      (mega-container--steps
+                       root
+                       (mapcan (lambda (key) (funcall inside attached key)) keys)
+                       (lambda () (mega-container--attach attached))))))))
     (cond
-     ((and existing (string-prefix-p "running" (cdr existing)))
-      (setq attached (plist-put attached :id (car existing))))
+     ;; Already there and running: join it.
+     (running (funcall finish attached '(:attached)))
+     ;; There, but stopped.
      (existing
-      (mega-container--ok engine (list "start" (car existing)))
-      (setq attached (plist-put attached :id (car existing))))
+      (mega-container--step
+       root (format "%s start" engine) engine (list "start" (car existing)) nil
+       (lambda (_printed) (funcall finish attached '(:started :attached)))))
+     ;; Not there: what the file says to do on this machine first, then make it.
      (t
-      (dolist (command (mega-container--commands (plist-get plan :initialize)))
-        (message "On this machine: %s" (string-join command " "))
-        (let ((result (mega-exec-run (car command) (cdr command)
-                                     :directory root :local t :timeout 1800)))
-          (unless (eql (plist-get result :status) 0)
-            (user-error "initializeCommand failed: %s"
-                        (string-trim (concat (plist-get result :error)
-                                             (plist-get result :output)))))))
-      (setq attached
-            (plist-put attached :id
-                       (mega-container--ok engine (mega-container-run-arguments plan)
-                                           :timeout 600)))
-      (setq created t)))
-    (when created
-      (mega-container--run-inside
-       attached (mapcan #'mega-container--commands (plist-get plan :created))))
-    (unless (and existing (string-prefix-p "running" (cdr existing)))
-      (mega-container--run-inside
-       attached (mapcan #'mega-container--commands (plist-get plan :started))))
-    attached))
+      (mega-container--steps
+       root
+       (mapcar (lambda (command)
+                 (list (concat "on this machine: " (string-join command " "))
+                       (car command) (cdr command) root))
+               (mega-container--all-commands plan :initialize))
+       (lambda ()
+         (mega-container--step
+          root (format "%s run %s" engine (plist-get plan :image))
+          engine (mega-container-run-arguments plan) nil
+          (lambda (printed)
+            ;; The id is the last thing it prints, after any progress.
+            (let ((id (car (last (split-string printed "[ \t\n\r]+" t)))))
+              (if (not id)
+                  (mega-container--give-up root "Not started: no container was made")
+                (funcall finish (plist-put (copy-sequence attached) :id id)
+                         '(:created :started :attached))))))))))))
 
-(defun mega-container--up-cli (engine plan)
-  "Start the container of PLAN with the official command; return what to attach to."
-  (let* ((root (plist-get plan :root))
-         (result (mega-exec-run "devcontainer"
-                                (list "up" "--workspace-folder" (directory-file-name root)
-                                      "--docker-path" engine)
-                                :directory root :local t :timeout 3600))
-         (line (car (last (split-string (plist-get result :output) "\n" t))))
-         (answer (ignore-errors (json-parse-string (or line "") :object-type 'alist))))
-    (unless (equal (alist-get 'outcome answer) "success")
-      (user-error "`devcontainer up' failed: %s"
-                  (string-trim (concat (alist-get 'message answer) "\n"
-                                       (plist-get result :error)))))
-    (list :engine engine
-          :id (alist-get 'containerId answer)
-          :user (or (alist-get 'remoteUser answer) (plist-get plan :user))
-          :folder (or (alist-get 'remoteWorkspaceFolder answer) (plist-get plan :folder))
-          :name (plist-get plan :name)
-          :env (plist-get plan :remote-env))))
+(defun mega-container--up-cli (engine plan file)
+  "Start the container of PLAN, described in FILE, with the official command."
+  (let ((root (plist-get plan :root)))
+    (mega-container--step
+     root "devcontainer up" "devcontainer"
+     (list "up" "--workspace-folder" (directory-file-name root)
+           "--config" file "--docker-path" engine)
+     root
+     (lambda (printed)
+       (let* ((line (car (last (split-string printed "\n" t))))
+              (answer (ignore-errors
+                        (json-parse-string (or line "") :object-type 'alist))))
+         (if (not (equal (alist-get 'outcome answer) "success"))
+             (mega-container--give-up
+              root (format "Not started: %s"
+                           (or (alist-get 'message answer)
+                               "the devcontainer command did not say it succeeded")))
+           (mega-container--attach
+            (list :root root
+                  :engine engine
+                  :id (alist-get 'containerId answer)
+                  :user (or (alist-get 'remoteUser answer) (plist-get plan :user))
+                  :folder (or (alist-get 'remoteWorkspaceFolder answer)
+                              (plist-get plan :folder))
+                  :name (plist-get plan :name)
+                  :env (plist-get plan :remote-env)))))))))
 
 ;;;; Being attached: where tools run, and what files are called there
 
@@ -460,8 +734,10 @@ only in the container, and gets a name Emacs can open it by."
   (let ((folder (file-name-as-directory (plist-get (cdr entry) :folder)))
         (attached (cdr entry)))
     (cond ((not (file-name-absolute-p file)) file)
-          ((string-prefix-p folder (file-name-as-directory file))
-           (concat (car entry) (string-remove-prefix folder file)))
+          ;; The workspace itself, named without its final slash.
+          ((equal (file-name-as-directory file) folder) (car entry))
+          ((string-prefix-p folder file)
+           (concat (car entry) (substring file (length folder))))
           (t (format "/%s:%s%s:%s"
                      (plist-get attached :engine)
                      (if-let* ((user (plist-get attached :user))) (concat user "@") "")
@@ -469,22 +745,22 @@ only in the container, and gets a name Emacs can open it by."
                      file)))))
 
 (defun mega-container--find (attached program)
-  "Non-nil if PROGRAM exists in the container ATTACHED.  Remembered."
+  "Non-nil if PROGRAM exists in the container ATTACHED.
+An answer is remembered; not having been able to ask is not an answer."
   (let* ((key (cons (plist-get attached :id) program))
          (known (gethash key mega-container--found)))
     (unless known
-      (setq known
-            (if (eql 0 (plist-get
-                        (mega-container--engine
-                         (plist-get attached :engine)
-                         (append (mega-container--exec-arguments
-                                  attached (plist-get attached :folder))
-                                 (list "/bin/sh" "-c" "command -v \"$1\"" "sh" program))
-                         :timeout 20)
-                        :status))
-                t
-              'no))
-      (puthash key known mega-container--found))
+      (let ((status (plist-get
+                     (mega-container--engine
+                      (plist-get attached :engine)
+                      (append (mega-container--exec-arguments
+                               attached (plist-get attached :folder))
+                              (list "/bin/sh" "-c" "command -v \"$1\"" "sh" program))
+                      :timeout 20)
+                     :status)))
+        (setq known (pcase status (0 t) ((or 1 127) 'no)))
+        (when known
+          (puthash key known mega-container--found))))
     (eq known t)))
 
 (defun mega-container-context (directory)
@@ -494,6 +770,7 @@ This is what `mega-exec' asks; see the Commentary of mega-exec.el."
     (let ((attached (cdr entry)))
       (list :kind 'container
             :name (plist-get attached :name)
+            :key (plist-get attached :id)
             :wrap (lambda (program args where)
                     (append (list (plist-get attached :engine))
                             (mega-container--exec-arguments
@@ -513,6 +790,32 @@ This is what `mega-exec' asks; see the Commentary of mega-exec.el."
 (add-to-list 'mode-line-misc-info '(:eval (mega-container--modeline)) t)
 
 ;;;; The language server sees the container's file names
+;;
+;; A server inside a container names files as the container has them.  Which
+;; container, when a name comes in, depends on which server said it and not
+;; on where the cursor happens to be: Emacs handles a server's messages on
+;; its own time, in a buffer of no project at all.  So each server is noted
+;; with its project when it is made, and while one of its messages is being
+;; handled, that project is the one names are translated for.
+
+(defvar mega-container--servers (make-hash-table :test #'eq :weakness 'key)
+  "The project root each language server was started for.")
+
+(defvar mega-container--speaking nil
+  "The project root of the server whose message is being handled, if any.")
+
+(defun mega-container--note-server (server)
+  "Note which project SERVER, just made, belongs to.
+For `eglot-server-initialized-hook', which runs in the project's root."
+  (puthash server (file-name-as-directory (expand-file-name default-directory))
+           mega-container--servers))
+
+(defun mega-container--receive (function connection &rest arguments)
+  "Call FUNCTION on CONNECTION and ARGUMENTS, knowing whose message it is.
+Advice around the function that handles a message from a server."
+  (let ((mega-container--speaking (or (gethash connection mega-container--servers)
+                                      mega-container--speaking)))
+    (apply function connection arguments)))
 
 (defun mega-container--path-to-uri (arguments)
   "Advice: give eglot the container's name for a file of an attached project."
@@ -523,13 +826,19 @@ This is what `mega-exec' asks; see the Commentary of mega-exec.el."
 
 (defun mega-container--uri-to-path (path)
   "Advice: turn a file name from a server in a container into this machine's."
-  (if-let* ((entry (and (stringp path) (mega-container-attached))))
+  (if-let* ((entry (and (stringp path)
+                        (mega-container-attached
+                         (or mega-container--speaking default-directory)))))
       (mega-container-to-host path entry)
     path))
 
 (with-eval-after-load 'eglot
+  (add-hook 'eglot-server-initialized-hook #'mega-container--note-server)
   (advice-add 'eglot-path-to-uri :filter-args #'mega-container--path-to-uri)
   (advice-add 'eglot-uri-to-path :filter-return #'mega-container--uri-to-path))
+
+(with-eval-after-load 'jsonrpc
+  (advice-add 'jsonrpc-connection-receive :around #'mega-container--receive))
 
 (defun mega-container--error-file-name (file)
   "Translate FILE, named in a tool's output, from the container to this machine."
@@ -545,32 +854,41 @@ This is what `mega-exec' asks; see the Commentary of mega-exec.el."
 
 (defun mega-container--root ()
   "The project root of the current buffer, as attached containers key it."
-  (file-name-as-directory
-   (expand-file-name (or (mega-project-root) default-directory))))
+  (mega-project-directory))
 
 ;;;###autoload
 (defun mega-container-up ()
-  "Start the project's dev container, or join it, and run its tools there."
+  "Start the project's dev container, or join it, and run its tools there.
+What can be asked is asked now; the rest happens in the background, and
+a window shows it."
   (interactive)
   (let* ((root (mega-container--root))
          (file (or (mega-container-config-file root)
                    (user-error "No devcontainer.json in %s" (abbreviate-file-name root))))
          (engine (or (mega-container-engine)
                      (user-error "Neither podman nor docker is installed")))
+         (cli (and (mega-exe-p "devcontainer") t))
          (plan (mega-container-plan (mega-container-read file) root)))
+    (when (assoc root mega-container--starting)
+      (user-error "This project's container is being started (C-c k x gives up)"))
     (unless (mega-trust-p root t "start its dev container")
-      (user-error "This project is not trusted; see M-x mega-trust-project"))
-    (unless (mega-container-approve file plan)
+      (user-error "This project is not trusted; C-c y trusts it"))
+    (unless cli
+      (mega-container--refuse-what-it-cannot-do plan))
+    (unless (mega-container-approve file plan cli)
       (user-error "Not started"))
-    (message "Starting the container of %s..." (plist-get plan :name))
-    (let ((attached (if (mega-exe-p "devcontainer")
-                        (mega-container--up-cli engine plan)
-                      (mega-container--up-native engine plan))))
-      (setf (alist-get root mega-container--attached nil nil #'equal) attached)
-      (message "Tools of %s now run in its container (%s)"
-               (abbreviate-file-name root)
-               (substring (plist-get attached :id) 0
-                          (min 12 (length (plist-get attached :id))))))))
+    (push (cons root nil) mega-container--starting)
+    (display-buffer (mega-container--show
+                     (format "Starting the container of %s" (plist-get plan :name)))
+                    '((display-buffer-reuse-window display-buffer-in-side-window)
+                      (side . bottom) (window-height . 0.3)))
+    (message "Starting the container of %s in the background..." (plist-get plan :name))
+    (condition-case err
+        (if cli
+            (mega-container--up-cli engine plan file)
+          (mega-container--up-native engine plan))
+      (error
+       (mega-container--give-up root (format "Not started: %s" (error-message-string err)))))))
 
 ;;;###autoload
 (defun mega-container-detach ()
@@ -580,20 +898,27 @@ The container itself is left running."
   (let ((entry (or (mega-container-attached)
                    (user-error "This project is not using a container"))))
     (setq mega-container--attached (delq entry mega-container--attached))
+    (force-mode-line-update t)
     (message "Detached; the container is still running")))
 
 ;;;###autoload
 (defun mega-container-stop ()
-  "Stop the project's container, after asking."
+  "Stop the project's container, after asking; or give up starting it."
   (interactive)
-  (let* ((entry (or (mega-container-attached)
-                    (user-error "This project is not using a container")))
-         (attached (cdr entry)))
-    (when (yes-or-no-p (format "Stop the container of %s? " (plist-get attached :name)))
-      (mega-container--ok (plist-get attached :engine)
-                          (list "stop" (plist-get attached :id)) :timeout 60)
-      (setq mega-container--attached (delq entry mega-container--attached))
-      (message "Stopped"))))
+  (if-let* ((starting (assoc (mega-container--root) mega-container--starting)))
+      (let ((process (cdr starting)))
+        (mega-container--give-up (car starting) "Given up starting the container")
+        (when (processp process)
+          (mega-exec-stop process)))
+    (let* ((entry (or (mega-container-attached)
+                      (user-error "This project is not using a container")))
+           (attached (cdr entry)))
+      (when (yes-or-no-p (format "Stop the container of %s? " (plist-get attached :name)))
+        (mega-container--ok (plist-get attached :engine)
+                            (list "stop" (plist-get attached :id)) :timeout 60)
+        (setq mega-container--attached (delq entry mega-container--attached))
+        (force-mode-line-update t)
+        (message "Stopped")))))
 
 ;;;###autoload
 (defun mega-container-rebuild ()
@@ -618,37 +943,40 @@ Volumes are kept."
   (let* ((entry (or (mega-container-attached)
                     (user-error "This project is not using a container; C-c k u starts it")))
          (attached (cdr entry))
-         (arguments (append (list "exec" "--interactive" "--tty")
-                            (when-let* ((user (plist-get attached :user)))
-                              (list "--user" user))
-                            (list "--workdir" (plist-get attached :folder)
-                                  (plist-get attached :id) "/bin/sh" "-c"
-                                  "command -v bash >/dev/null && exec bash || exec sh"))))
+         ;; The same command every other tool of the project gets, with the
+         ;; user, the directory and the environment that implies, plus a
+         ;; terminal.  The line handed to the shell is fixed text.
+         (command (let ((mega-exec-terminal t))
+                    (mega-exec-command
+                     "/bin/sh"
+                     '("-c" "command -v bash >/dev/null && exec bash || exec sh")
+                     (car entry)))))
     (require 'term)
     (pop-to-buffer
      (apply #'make-term (format "container: %s" (plist-get attached :name))
-            (plist-get attached :engine) nil arguments))
+            (car command) nil (cdr command)))
     (term-char-mode)))
 
 ;;;###autoload
 (defun mega-container-info ()
   "Say which container the project is using, if any."
   (interactive)
-  (if-let* ((entry (mega-container-attached)))
+  (cond
+   ((mega-container-attached)
+    (let ((attached (cdr (mega-container-attached))))
       (message "%s: %s container %s, user %s, workspace %s"
-               (plist-get (cdr entry) :name) (plist-get (cdr entry) :engine)
-               (plist-get (cdr entry) :id)
-               (or (plist-get (cdr entry) :user) "default")
-               (plist-get (cdr entry) :folder))
-    (let ((file (mega-container-config-file (mega-container--root))))
-      (message (if file
-                   "Not using a container.  This project has one: C-c k u starts it"
-                 "Not using a container, and this project describes none")))))
+               (plist-get attached :name) (plist-get attached :engine)
+               (plist-get attached :id)
+               (or (plist-get attached :user) "default")
+               (plist-get attached :folder))))
+   ((assoc (mega-container--root) mega-container--starting)
+    (message "This project's container is being started; %s shows how far it is"
+             mega-container-log-buffer))
+   ((mega-container-config-file (mega-container--root))
+    (message "Not using a container.  This project has one: C-c k u starts it"))
+   (t (message "Not using a container, and this project describes none"))))
 
 ;;;; The doctor
-
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
 
 (defun mega-container--doctor ()
   "Insert the doctor's section about dev containers."

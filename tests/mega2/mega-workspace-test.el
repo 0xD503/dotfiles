@@ -22,8 +22,7 @@ elsewhere."
          (with-current-buffer buffer (set-buffer-modified-p nil))
          (kill-buffer buffer)))
      (mega-test-with-directory store
-       (let ((mega-workspace-directory store)
-             (temporary-file-directory "/nonexistent-temporary-directory/"))
+       (let ((mega-workspace-directory store))
          (unwind-protect
              (progn ,@body)
            (dolist (buffer (buffer-list))
@@ -40,15 +39,74 @@ elsewhere."
 ;;;; What is recorded
 
 (ert-deftest mega-workspace-records-ordinary-local-files-only ()
-  (let ((temporary-file-directory "/nonexistent-temporary-directory/"))
-    (should (mega-workspace--recordable-p "/home/u/src/main.rs"))
-    (should-not (mega-workspace--recordable-p nil))
-    (should-not (mega-workspace--recordable-p "/ssh:host:/home/u/main.rs"))
-    (should-not (mega-workspace--recordable-p "/home/u/app/.env"))
-    (should-not (mega-workspace--recordable-p "/home/u/.ssh/config"))
-    (should-not (mega-workspace--recordable-p "/home/u/repo/.git/COMMIT_EDITMSG")))
-  (let ((temporary-file-directory "/tmp/"))
+  (should (mega-workspace--recordable-p "/home/u/src/main.rs"))
+  (should-not (mega-workspace--recordable-p nil))
+  (should-not (mega-workspace--recordable-p "/ssh:host:/home/u/main.rs"))
+  (should-not (mega-workspace--recordable-p "/home/u/app/.env"))
+  (should-not (mega-workspace--recordable-p "/home/u/.ssh/config"))
+  (should-not (mega-workspace--recordable-p "/home/u/repo/.git/COMMIT_EDITMSG"))
+  (let ((mega-temporary-directories mega-test-temporary-directories))
     (should-not (mega-workspace--recordable-p "/tmp/scratch.txt"))))
+
+(ert-deftest mega-workspace-the-saved-layout-names-only-what-is-recorded ()
+  "A window on a secret, or one that showed a secret before, leaves no name."
+  (mega-workspace-test--session dir
+    (let ((plain (mega-workspace-test--open dir "plain.txt" "alpha" ""))
+          (secret (mega-workspace-test--open dir "prod.tfvars" "token = 1" ""))
+          (other (mega-workspace-test--open dir ".pgpass" "host:5432:db:u:pw" "")))
+      (save-window-excursion
+        (delete-other-windows)
+        ;; The first window showed a secret and then an ordinary file...
+        (switch-to-buffer (get-file-buffer other))
+        (switch-to-buffer (get-file-buffer plain))
+        ;; ...and the second one shows a secret now.
+        (select-window (split-window-right))
+        (switch-to-buffer (get-file-buffer secret))
+        (let ((workspace (mega-workspace-capture "mine")))
+          (mega-workspace-write workspace)
+          (let ((saved (with-temp-buffer
+                         (insert-file-contents (mega-workspace--file "mine"))
+                         (buffer-string))))
+            (should (string-match-p "plain\\.txt" saved))
+            (should-not (string-match-p "tfvars" saved))
+            (should-not (string-match-p "pgpass" saved))
+            (should-not (string-match-p "prev-buffers\\|next-buffers" saved))
+            (should-not (string-match-p "scratch" saved))))))))
+
+(ert-deftest mega-workspace-a-cleaned-layout-still-comes-back ()
+  (mega-workspace-test--session dir
+    (let ((a (mega-workspace-test--open dir "a.txt" "alpha" "beta" ""))
+          (b (mega-workspace-test--open dir "b.txt" "gamma" "")))
+      (save-window-excursion
+        (delete-other-windows)
+        (switch-to-buffer (get-file-buffer b))
+        (switch-to-buffer (get-file-buffer a))
+        (select-window (split-window-right))
+        (switch-to-buffer (get-file-buffer b))
+        (let ((workspace (mega-workspace-capture "two")))
+          (delete-other-windows)
+          (mega-workspace-restore workspace)
+          (should (equal (sort (mapcar (lambda (window)
+                                         (buffer-name (window-buffer window)))
+                                       (window-list))
+                               #'string<)
+                         '("a.txt" "b.txt"))))))))
+
+(ert-deftest mega-workspace-a-long-name-still-gets-a-file ()
+  "The path of a deep project is longer than a file name may be."
+  (mega-workspace-test--session dir
+    (let* ((long (concat "~/src/" (mapconcat #'identity (make-list 40 "a-deep-directory") "/") "/"))
+           (other (concat long "x/")))
+      (should (< (length (file-name-nondirectory (mega-workspace--file long))) 255))
+      ;; Two long names that start alike do not share a file.
+      (should-not (equal (mega-workspace--file long) (mega-workspace--file other)))
+      (mega-workspace-write (list :name long :saved 1.0 :files '(("/a" 1))))
+      (should (equal (plist-get (mega-workspace-read long) :name) long))
+      (should (member long (mapcar (lambda (w) (plist-get w :name))
+                                   (mega-workspace-all))))
+      ;; A short one is still readable in a listing of the directory.
+      (should (equal (file-name-nondirectory (mega-workspace--file "~/src/app/"))
+                     "%7E%2Fsrc%2Fapp%2F.eld")))))
 
 (ert-deftest mega-workspace-capture-records-files-and-cursor-positions ()
   (mega-workspace-test--session dir
@@ -265,11 +323,24 @@ elsewhere."
 
 (ert-deftest mega-home-shows-how-long-emacs-took-to-start ()
   (mega-workspace-test--home nil
-    (let ((before-init-time '(0 0)) (after-init-time '(0 0 73000)))
+    (let ((before-init-time '(0 0)) (mega-home--started '(0 0 73000)))
       (should (= (mega-home-startup-time) 73.0))
       (should (string-match-p "started in 73 ms" (mega-workspace-test--page))))
-    (let ((after-init-time nil))
+    (let ((mega-home--started nil))
       (should-not (string-match-p "started in" (mega-workspace-test--page))))))
+
+(ert-deftest mega-home-the-time-shown-is-the-time-waited ()
+  "Up to the end of what MEGA put off until Emacs had started, not only
+what Emacs calls init: that part ends before the hook has run."
+  (let ((before-init-time (time-subtract (current-time) 2))
+        (after-init-time (time-subtract (current-time) 1))
+        (mega-home--started nil)
+        (noninteractive t))
+    ;; The hook that draws the page is the one that notes the time.
+    (should (memq #'mega-home-at-startup emacs-startup-hook))
+    (mega-home-at-startup)
+    (should (> (mega-home-startup-time) 1999.0))
+    (should (< (mega-home-startup-time) 2500.0))))
 
 (ert-deftest mega-home-names-mega-and-emacs ()
   (mega-workspace-test--home nil

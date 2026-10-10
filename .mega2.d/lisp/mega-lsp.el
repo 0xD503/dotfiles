@@ -24,6 +24,7 @@
 ;;; Code:
 
 (require 'mega-lib)
+(require 'mega-trust)
 (require 'mega-popup)
 
 (defvar eglot-events-buffer-config)
@@ -70,9 +71,55 @@
  eglot-send-changes-idle-time 0.4)
 
 ;; Telemetry off, for the servers that would otherwise send it.
-(setq-default eglot-workspace-configuration
-              '(:redhat (:telemetry (:enabled :json-false))
-                :telemetry (:enableTelemetry :json-false)))
+(defconst mega-lsp-private-configuration
+  '(:redhat (:telemetry (:enabled :json-false))
+    :telemetry (:enableTelemetry :json-false))
+  "Settings every language server is given, whatever a project says.")
+
+(setq-default eglot-workspace-configuration mega-lsp-private-configuration)
+
+(defun mega-lsp--merge (settings over)
+  "SETTINGS, a plist of plists, with those of OVER taking precedence."
+  (let ((merged (copy-sequence settings)))
+    (while over
+      (let ((key (pop over)) (value (pop over)))
+        (setq merged
+              (plist-put merged key
+                         (if (and (plistp value) (keywordp (car-safe value))
+                                  (plistp (plist-get merged key))
+                                  (keywordp (car-safe (plist-get merged key))))
+                             (mega-lsp--merge (plist-get merged key) value)
+                           value)))))
+    merged))
+
+(defun mega-lsp--keep-private ()
+  "Keep MEGA's privacy settings in a server configuration a project supplies.
+A project may configure its language server through its own files, and
+Emacs lets it.  That replaces the default above, telemetry settings
+included, so they are put back on top of whatever the project said."
+  (when (local-variable-p 'eglot-workspace-configuration)
+    (let ((given eglot-workspace-configuration))
+      (cond ((functionp given)
+             (setq-local eglot-workspace-configuration
+                         (lambda (&rest arguments)
+                           (mega-lsp--merge (apply given arguments)
+                                            mega-lsp-private-configuration))))
+            ((keywordp (car-safe given))
+             (setq-local eglot-workspace-configuration
+                         (mega-lsp--merge given mega-lsp-private-configuration)))
+            ;; The older form, a list of (SECTION . SETTINGS).
+            ((listp given)
+             (setq-local eglot-workspace-configuration
+                         (mega-lsp--merge
+                          (mapcan (lambda (entry)
+                                    (list (intern
+                                           (concat ":" (replace-regexp-in-string
+                                                        "\\`:" "" (format "%s" (car entry)))))
+                                          (cdr entry)))
+                                  given)
+                          mega-lsp-private-configuration)))))))
+
+(add-hook 'hack-local-variables-hook #'mega-lsp--keep-private)
 
 (with-eval-after-load 'eglot
   ;; Inlay hints add noise in a terminal and cost a round trip per change.
@@ -80,11 +127,36 @@
   (add-to-list 'eglot-ignored-server-capabilities :inlayHintProvider))
 
 ;;;; Diagnostics
+;;
+;; Emacs checks a buffer with whatever its mode registers, and several of
+;; those checkers run the project: for C it is `make', for Perl the file
+;; itself as far as its BEGIN blocks, for Rust a compiler the project may
+;; choose.  So checking is one of the tools trust is about, and in a project
+;; you have not trusted there is none.  A language server brings its own
+;; diagnostics, and is held back by the same rule.
 
 (setq flymake-no-changes-timeout 0.5
       flymake-show-diagnostics-at-end-of-line nil)
 
-(add-hook 'prog-mode-hook #'flymake-mode)
+(defun mega-lsp-diagnostics ()
+  "Check the current buffer as you type, if its project is trusted."
+  (when (and buffer-file-name
+             (not (file-remote-p buffer-file-name)))
+    (if (mega-trust-p default-directory)
+        (flymake-mode 1)
+      (when (bound-and-true-p flymake-mode)
+        (flymake-mode -1)))))
+
+(add-hook 'prog-mode-hook #'mega-lsp-diagnostics)
+
+(defun mega-lsp--trust-changed (root)
+  "Start or stop checking the buffers a decision about ROOT applies to."
+  (dolist (buffer (mega-trust-buffers root))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'prog-mode)
+        (mega-lsp-diagnostics)))))
+
+(add-hook 'mega-trust-change-functions #'mega-lsp--trust-changed)
 
 ;;;; Navigation
 

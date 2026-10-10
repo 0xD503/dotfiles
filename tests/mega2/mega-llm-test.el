@@ -155,18 +155,51 @@ FAKE is the directory the stand-ins write to."
     (should-not (string-match-p "chosen\\|SECRET" (mega-llm-test--read "args")))))
 
 (ert-deftest mega-llm-explain-takes-the-function-at-point ()
+  "With nothing selected MEGA chooses what to send, so it says how much first."
   (mega-llm-test--with-claude
     (with-temp-buffer
       (emacs-lisp-mode)
       (insert "(defun one () 1)\n\n(defun two ()\n  2)\n\n(defun three () 3)\n")
       (goto-char (point-min))
       (search-forward "2")
-      (mega-claude-explain))
+      ;; Asked, and a no sends nothing.
+      (let (question)
+        (cl-letf (((symbol-function 'y-or-n-p)
+                   (lambda (prompt) (setq question prompt) nil)))
+          (should-error (mega-claude-explain) :type 'user-error))
+        (should (string-match-p "2 lines" question))
+        (should-not mega-claude--request)
+        (should-not (mega-llm-test--read "stdin")))
+      (cl-letf (((symbol-function 'y-or-n-p) #'always))
+        (mega-claude-explain)))
     (mega-llm-test--answered)
     (let ((sent (mega-llm-test--read "stdin")))
       (should (string-match-p "(defun two ()\n  2)" sent))
       (should-not (string-match-p "one\\|three" sent)))
     (should (string-match-p "The answer\\." (mega-test-buffer-string "*claude*")))))
+
+(ert-deftest mega-llm-selected-text-is-sent-without-a-second-question ()
+  (mega-llm-test--with-claude
+    (with-temp-buffer
+      (insert "some notes\nthat are not code\n")
+      (mega-llm-test--select (point-min) (point-max))
+      (cl-letf (((symbol-function 'y-or-n-p)
+                 (lambda (&rest _) (error "Asked although the text was selected"))))
+        (mega-claude-explain)))
+    (mega-llm-test--answered)
+    (should (string-match-p "that are not code" (mega-llm-test--read "stdin")))))
+
+(ert-deftest mega-llm-outside-code-there-is-no-function-at-point-to-send ()
+  "In prose \"the function at point\" can be most of the file."
+  (mega-llm-test--with-claude
+    (with-temp-buffer
+      (text-mode)
+      (insert "a paragraph\nof private notes\n")
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'y-or-n-p) #'always))
+        (should-error (mega-claude-explain) :type 'user-error)))
+    (should-not mega-claude--request)
+    (should-not (mega-llm-test--read "stdin"))))
 
 (ert-deftest mega-llm-nothing-selected-and-nothing-at-point-sends-nothing ()
   (mega-llm-test--with-claude
@@ -385,6 +418,53 @@ REPLY is what Claude answers.  The answer has arrived when BODY runs."
         (should (string-match-p "^load-buffer -b mega-claude -$" log))
         (should (string-match-p "^paste-buffer -p -d -b mega-claude -t %7$" log))
         (should-not (string-match-p "line one\\|rm -rf" log))))))
+
+(ert-deftest mega-llm-pasted-text-cannot-end-the-paste-early ()
+  "A terminal trusts whatever lies between the two marks of a paste.  Text
+carrying the closing mark would be cut there, and the rest typed and sent."
+  (let ((hostile (concat "harmless\n" "\e[201~" "\rrm -rf ~\r" "\tkept\x07\x00\n")))
+    (should (equal (mega-claude--pasteable hostile)
+                   "harmless\n[201~rm -rf ~\tkept\n")))
+  ;; Newlines and tabs are text; nothing else below a space is.
+  (should (equal (mega-claude--pasteable "a\tb\nc") "a\tb\nc"))
+  (should (equal (mega-claude--pasteable "naïve → 日本") "naïve → 日本"))
+  ;; Through tmux, the same.
+  (mega-llm-test--with-claude
+    (let ((mega-claude-terminal 'tmux))
+      (with-temp-buffer
+        (insert "one\e[201~\rtwo\n")
+        (mega-claude)
+        (mega-claude-send-region (point-min) (point-max)))
+      (should (equal (mega-llm-test--read "pasted") "one[201~two\n")))))
+
+(ert-deftest mega-llm-the-session-and-tmux-are-on-this-machine ()
+  (mega-llm-test--with-claude
+    (let ((mega-claude-terminal 'tmux)
+          (default-directory "/ssh:mega-test.invalid:/srv/"))
+      ;; The host does not exist; reaching for it would fail.
+      (should (eql 0 (plist-get (mega-claude--tmux "display-message" "-p") :status))))))
+
+(ert-deftest mega-llm-the-difference-is-made-without-a-copy-in-the-shared-temp ()
+  (skip-unless (executable-find "diff"))
+  (mega-test-with-directory shared
+    (let ((temporary-file-directory shared))
+      (let ((shown (mega-claude--difference "one\ntwo\n" "one\n2\n")))
+        (should (string-match-p "^-two$" shown))
+        (should (string-match-p "^\\+2$" shown))
+        ;; No names of temporary files in what is shown.
+        (should (string-prefix-p "@@" shown)))
+      (should (equal (mega-claude--difference "same\n" "same\n")
+                     "(Claude returned the text unchanged.)"))
+      ;; Nothing was written where every program of yours can read...
+      (should-not (directory-files shared nil directory-files-no-dot-files-regexp))
+      ;; ...and nothing is left in MEGA's own directory either.
+      (should-not (directory-files (mega-cache "claude-diff/") nil
+                                   directory-files-no-dot-files-regexp)))))
+
+(ert-deftest mega-llm-an-unfenced-answer-keeps-its-indentation ()
+  (should (equal (mega-claude--strip-fence "\n    indented(code);\n") "    indented(code);"))
+  (should (equal (mega-claude--replacement "    let x = 1;\n" "    let x = 0;\n")
+                 "    let x = 1;\n")))
 
 (ert-deftest mega-llm-a-session-in-an-emacs-terminal-runs-in-the-project ()
   (mega-llm-test--with-claude

@@ -88,7 +88,9 @@ request that starts the program.")
 (defun mega-dap-take (buffer)
   "Remove the complete messages at the start of BUFFER and return them.
 BUFFER holds the bytes received so far; a message that has not arrived
-whole is left there.  Each message is a plist."
+whole is left there.  Each message is a plist.  One that cannot be read
+comes back as (:type \"unreadable\"): it is one message lost, and must
+not cost the ones around it."
   (with-current-buffer buffer
     (let ((messages nil) (more t))
       (while more
@@ -112,8 +114,11 @@ whole is left there.  Each message is a plist."
                    (let ((text (decode-coding-string
                                 (buffer-substring start (+ start length)) 'utf-8)))
                      (delete-region (point-min) (+ start length))
-                     (push (json-parse-string text :object-type 'plist :array-type 'list
-                                              :null-object nil :false-object nil)
+                     (push (condition-case nil
+                               (json-parse-string text :object-type 'plist
+                                                  :array-type 'list
+                                                  :null-object nil :false-object nil)
+                             (error (list :type "unreadable")))
                            messages)))))))
       (nreverse messages))))
 
@@ -189,6 +194,7 @@ With REMOVE-ONLY non-nil, only remove.  A running debugger is told."
 ;;;; The session
 
 (defvar mega-dap--process nil "The adapter, while a session is on.")
+(defvar mega-dap--bytes nil "The buffer of what the adapter has sent and is not yet read.")
 (defvar mega-dap--root nil "The project being debugged.")
 (defvar mega-dap--seq 0 "The number of the last message sent.")
 (defvar mega-dap--pending (make-hash-table) "What to do with each answer still awaited.")
@@ -276,30 +282,58 @@ THEN, if given, is called with the body of the answer when it succeeded."
                    (plist-get answer :stackFrames)))
      (mega-dap--select 0))))
 
+(defvar mega-dap--asked 0
+  "Counts the times a frame's variables were asked for.
+An answer to an earlier asking, arriving late, is not the frame shown.")
+
+(defun mega-dap--own-scopes (scopes)
+  "Those of SCOPES that hold a function's own variables, in order.
+Adapters cut a frame up differently: lldb has one scope of locals with
+the arguments in it; gdb has one of arguments and one of locals, and
+either is missing when it would be empty.  Both say which is which.
+For an adapter that does not, it is the first that is cheap to read
+and is not the registers."
+  (or (seq-filter (lambda (scope)
+                    (member (plist-get scope :presentationHint) '("arguments" "locals")))
+                  scopes)
+      (when-let* ((first (seq-find
+                          (lambda (scope)
+                            (not (or (plist-get scope :expensive)
+                                     (equal (plist-get scope :presentationHint)
+                                            "registers"))))
+                          scopes)))
+        (list first))))
+
 (defun mega-dap--select (index)
   "Make frame INDEX of the stack the one shown, and ask for its variables."
   (setq mega-dap--frame index
-        mega-dap--locals nil)
-  (let ((frame (nth index mega-dap--frames)))
+        mega-dap--locals nil
+        mega-dap--asked (1+ mega-dap--asked))
+  (let ((frame (nth index mega-dap--frames))
+        (asked mega-dap--asked))
     (mega-dap--show-line frame)
     (mega-dap--refresh)
     (when frame
       (mega-dap--request
        "scopes" (list :frameId (plist-get frame :id))
        (lambda (answer)
-         ;; The first scope that is cheap to read: the locals.  Registers
-         ;; and the like are marked expensive.
-         (when-let* ((scope (seq-find (lambda (scope) (not (plist-get scope :expensive)))
-                                      (plist-get answer :scopes))))
-           (mega-dap--request
-            "variables" (list :variablesReference (plist-get scope :variablesReference))
-            (lambda (answer)
-              (setq mega-dap--locals
-                    (mapcar (lambda (variable)
-                              (cons (plist-get variable :name)
-                                    (plist-get variable :value)))
-                            (plist-get answer :variables)))
-              (mega-dap--refresh)))))))))
+         (let* ((scopes (mega-dap--own-scopes (plist-get answer :scopes)))
+                ;; One answer per scope, in whatever order they come.
+                (parts (make-vector (length scopes) nil)))
+           (seq-do-indexed
+            (lambda (scope position)
+              (mega-dap--request
+               "variables" (list :variablesReference (plist-get scope :variablesReference))
+               (lambda (answer)
+                 (when (= asked mega-dap--asked)
+                   (aset parts position
+                         (mapcar (lambda (variable)
+                                   (cons (plist-get variable :name)
+                                         (plist-get variable :value)))
+                                 (plist-get answer :variables)))
+                   (setq mega-dap--locals (apply #'append (append parts nil)))
+                   (mega-dap--refresh)))))
+            scopes)))))))
 
 (defun mega-dap--event (event body)
   "Act on EVENT from the adapter, with its BODY."
@@ -346,38 +380,37 @@ THEN, if given, is called with the body of the answer when it succeeded."
      ;; program in.  MEGA offers none of it, and says so.
      (mega-dap--send (list :type "response" :request_seq (plist-get message :seq)
                            :success :false :command (plist-get message :command)
-                           :message "not supported")))))
+                           :message "not supported")))
+    ("unreadable"
+     (mega-dap--note "The debugger said something MEGA could not read"))))
 
 (defun mega-dap--filter (process bytes)
   "Take in BYTES from PROCESS, the adapter, and act on whole messages."
-  (when (buffer-live-p (process-buffer process))
-    (with-current-buffer (process-buffer process)
+  (when (and (eq process mega-dap--process) (buffer-live-p mega-dap--bytes))
+    (with-current-buffer mega-dap--bytes
       (goto-char (point-max))
       (insert bytes))
-    (dolist (message (mega-dap-take (process-buffer process)))
+    (dolist (message (mega-dap-take mega-dap--bytes))
       ;; This runs between your keystrokes: a message MEGA cannot make
-      ;; sense of is noted, never raised.
+      ;; sense of is noted, never raised, and the next one is still read.
       (condition-case err
           (mega-dap--receive message)
         (error (mega-dap--note (format "MEGA: %s" (error-message-string err))))))))
 
-(defun mega-dap--sentinel (process _event)
+(defun mega-dap--sentinel (process)
   "Clean up when PROCESS, the adapter, has ended."
-  (unless (process-live-p process)
-    (when (eq process mega-dap--process)
-      (mega-dap--note "The debugger has ended")
-      (mega-dap--end))))
+  (when (eq process mega-dap--process)
+    (mega-dap--note "The debugger has ended")
+    (mega-dap--end)))
 
 (defun mega-dap--end ()
   "Forget the session.  Breakpoints and what was printed stay."
   (when-let* ((process mega-dap--process))
     (setq mega-dap--process nil)
-    (when (process-live-p process) (delete-process process))
-    (when-let* ((errors (process-get process 'mega-dap-errors)))
-      (when-let* ((stderr (get-buffer-process errors))) (delete-process stderr))
-      (when (buffer-live-p errors) (kill-buffer errors)))
-    (when (buffer-live-p (process-buffer process))
-      (kill-buffer (process-buffer process))))
+    (mega-exec-stop process))
+  (when (buffer-live-p mega-dap--bytes)
+    (kill-buffer mega-dap--bytes))
+  (setq mega-dap--bytes nil)
   (clrhash mega-dap--pending)
   (setq mega-dap--state nil
         mega-dap--reason nil
@@ -448,61 +481,93 @@ SELECTED the index of the frame shown; LOCALS are its variables, as
     (setq mega-dap--arrow nil)))
 
 (defun mega-dap--show-line (frame)
-  "Show the line FRAME, an element of the stack, is at."
+  "Show the line FRAME, an element of the stack, is at.
+The file is opened a moment later, not now: this is called while a
+message from the adapter is being read, and opening a file runs
+everything a file runs when it is opened.  A file that is not on this
+machine, such as a system header inside the container, is not opened at
+all; the stack still names it."
   (mega-dap--hide-line)
   (let ((file (plist-get frame :file))
-        (line (plist-get frame :line)))
-    (when (and file line (file-readable-p file))
-      (let ((buffer (find-file-noselect file)))
-        (with-current-buffer buffer
-          (save-restriction
-            (widen)
-            (goto-char (point-min))
-            (forward-line (1- line))
-            (setq mega-dap--arrow
-                  (make-overlay (line-beginning-position)
-                                (min (point-max) (1+ (line-end-position)))))
-            (overlay-put mega-dap--arrow 'face 'mega-dap-current)
-            (overlay-put mega-dap--arrow 'priority 10)))
-        ;; In a window that shows code, never in the session window.
-        (when-let* ((window (display-buffer
-                             buffer '((display-buffer-reuse-window
-                                       display-buffer-use-some-window)
-                                      (inhibit-same-window . nil)))))
-          (set-window-point window (overlay-start mega-dap--arrow)))))))
+        (line (plist-get frame :line))
+        (process mega-dap--process))
+    (when (and file line
+               (not (file-remote-p file))
+               (file-readable-p file))
+      (run-at-time
+       0 nil
+       (lambda ()
+         ;; Still the same stop of the same session?
+         (when (and (eq process mega-dap--process)
+                    (eq frame (nth mega-dap--frame mega-dap--frames)))
+           (condition-case err
+               (mega-dap--mark-line file line)
+             (error (mega-dap--note (format "MEGA: %s" (error-message-string err)))))))))))
+
+(defun mega-dap--mark-line (file line)
+  "Mark LINE of FILE as where the program is, and bring it on screen."
+  (mega-dap--hide-line)
+  (let ((buffer (find-file-noselect file)))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (setq mega-dap--arrow
+              (make-overlay (line-beginning-position)
+                            (min (point-max) (1+ (line-end-position)))))
+        (overlay-put mega-dap--arrow 'face 'mega-dap-current)
+        (overlay-put mega-dap--arrow 'priority 10)))
+    ;; In a window that shows code, never in the session window.
+    (when-let* ((window (display-buffer
+                         buffer '((display-buffer-reuse-window
+                                   display-buffer-use-some-window)
+                                  (inhibit-same-window . nil)))))
+      (set-window-point window (overlay-start mega-dap--arrow)))))
 
 ;;;; Which adapter
 
 (defvar mega-dap--usable (make-hash-table :test #'equal)
   "What was found out about an adapter where a project's tools run.
-The key is (CONTEXT-NAME . ADAPTER); the value is the name of the
+The key is (CONTEXT-KEY . ADAPTER); the value is the name of the
 program to run, or `no' if the adapter is missing or too old.")
 
-(defun mega-dap--new-enough-p (program properties root)
-  "Non-nil if PROGRAM is as new as PROPERTIES, those of its adapter, require.
-It is asked where the tools of ROOT run."
-  (or (not (plist-get properties :minimum))
-      (let* ((result (mega-exec-run program (plist-get properties :version)
-                                    :directory root :timeout 10))
-             (line (car (split-string (plist-get result :output) "\n"))))
-        (and (string-match "\\([0-9]+\\)\\.[0-9]+[^ ]*\\'" (or line ""))
-             (>= (string-to-number (match-string 1 line))
-                 (plist-get properties :minimum))))))
+(defun mega-dap--new-enough (program properties root)
+  "Whether PROGRAM is as new as PROPERTIES, those of its adapter, require.
+It is asked where the tools of ROOT run.  Return `yes', `no', or nil if
+it could not be asked: that is not an answer, and is not remembered."
+  (if (not (plist-get properties :minimum))
+      'yes
+    (let* ((result (mega-exec-run program (plist-get properties :version)
+                                  :directory root :timeout 10))
+           (line (car (split-string (plist-get result :output) "\n"))))
+      (cond ((not (eql (plist-get result :status) 0)) nil)
+            ((and (string-match "\\([0-9]+\\)\\.[0-9]+[^ ]*\\'" (or line ""))
+                  (>= (string-to-number (match-string 1 line))
+                      (plist-get properties :minimum)))
+             'yes)
+            (t 'no)))))
 
 (defun mega-dap-program (entry root)
   "The program to run for the adapter ENTRY in the project at ROOT, or nil.
-Nil means it is not installed there, or too old.  Remembered."
+Nil means it is not installed there, or too old.  A definite answer is
+remembered until `mega-forget-executables'."
   (let* ((properties (cdr entry))
-         (key (cons (plist-get (mega-exec-context root) :name) (car entry)))
+         (key (cons (mega-exec-context-key root) (car entry)))
          (known (gethash key mega-dap--usable)))
     (unless known
-      (setq known
-            (or (seq-find (lambda (program)
-                            (and (mega-exec-find program root)
-                                 (mega-dap--new-enough-p program properties root)))
-                          (plist-get properties :programs))
-                'no))
-      (puthash key known mega-dap--usable))
+      (let ((unsure nil))
+        (setq known
+              (or (seq-find (lambda (program)
+                              (and (mega-exec-find program root)
+                                   (pcase (mega-dap--new-enough program properties root)
+                                     ('yes t)
+                                     ('no nil)
+                                     (_ (setq unsure t) nil))))
+                            (plist-get properties :programs))
+                  'no))
+        (unless (and unsure (eq known 'no))
+          (puthash key known mega-dap--usable))))
     (and (stringp known) known)))
 
 (defun mega-dap-choose (language root &optional prefer)
@@ -522,14 +587,26 @@ family are tried before those of a later one."
 ;;;; What an adapter needs to be told
 
 (defvar mega-dap--rust-support (make-hash-table :test #'equal)
-  "The commands that teach lldb about Rust, by context name; `no' if none.")
+  "The commands that teach lldb about Rust, by context key; `no' if none.")
+
+(defvar mega-dap--fixed-addresses (make-hash-table :test #'equal)
+  "Whether a program can be started at fixed addresses, by context key.
+`yes' or `no'.")
+
+(defun mega-dap--forget ()
+  "Forget what was found out about the places programs are debugged in."
+  (clrhash mega-dap--usable)
+  (clrhash mega-dap--rust-support)
+  (clrhash mega-dap--fixed-addresses))
+
+(add-hook 'mega-forget-functions #'mega-dap--forget)
 
 (defun mega-dap--rust-support (root)
   "The lldb commands that make Rust values readable, where ROOT's tools run.
 They are the ones `rust-lldb' gives lldb: load the scripts Rust ships
 beside its compiler.  Where they are is asked of `rustc', and only those
 that exist are named; which do has changed between versions of Rust."
-  (let* ((key (plist-get (mega-exec-context root) :name))
+  (let* ((key (mega-exec-context-key root))
          (known (gethash key mega-dap--rust-support)))
     (unless known
       (setq known
@@ -557,13 +634,39 @@ that exist are named; which do has changed between versions of Rust."
       (puthash key known mega-dap--rust-support))
     (and (consp known) known)))
 
+(defun mega-dap--fixed-addresses-p (root)
+  "Non-nil if a program can be started at fixed addresses where ROOT's tools run.
+A debugger asks the kernel for that, so that one run looks like the
+next.  A container is usually set up to refuse, unless it was started
+with its system-call filter off; gdb then says so and goes on, and
+lldb's adapter starts nothing at all.  So it is asked first, once per
+place, the way a debugger would ask."
+  (let* ((key (mega-exec-context-key root))
+         (known (gethash key mega-dap--fixed-addresses)))
+    (unless known
+      (setq known
+            (if (eql 0 (plist-get
+                        (ignore-errors
+                          (mega-exec-run "sh" '("-c" "setarch \"$(uname -m)\" -R true")
+                                         :directory root :timeout 10))
+                        :status))
+                'yes
+              'no))
+      (puthash key known mega-dap--fixed-addresses))
+    (eq known 'yes)))
+
 (defun mega-dap-lldb-launch (language root)
   "What lldb's adapter is told besides the program, for LANGUAGE at ROOT.
-For Rust, the commands that make a String show as its text and a Vec as
-its elements rather than as pointers."
-  (when (eq language 'rust)
-    (when-let* ((commands (mega-dap--rust-support root)))
-      (list :initCommands (vconcat commands)))))
+Not to insist on fixed addresses where there are none to be had: see
+`mega-dap--fixed-addresses-p'.  And for Rust, the commands that make a
+String show as its text and a Vec as its elements rather than as
+pointers."
+  (append
+   (unless (mega-dap--fixed-addresses-p root)
+     (list :disableASLR :false))
+   (when (eq language 'rust)
+     (when-let* ((commands (mega-dap--rust-support root)))
+       (list :initCommands (vconcat commands))))))
 
 ;;;; Starting and stopping
 
@@ -577,27 +680,20 @@ LANGUAGE, a key of `mega-dap-languages', is what TARGET is written in."
          (properties (cdr entry))
          (program (or (mega-dap-program entry root)
                       (user-error "%s is not installed, or too old" (car entry))))
-         (command (mega-exec-command program (plist-get properties :arguments) root))
          (extra (and (plist-get properties :launch)
-                     (funcall (plist-get properties :launch) language root)))
-         (errors (generate-new-buffer " *mega-dap-stderr*" t))
-         (buffer (generate-new-buffer " *mega-dap*" t)))
-    (with-current-buffer buffer (set-buffer-multibyte nil))
+                     (funcall (plist-get properties :launch) language root))))
     (setq mega-dap--root root
           mega-dap--seq 0
           mega-dap--state 'starting
           mega-dap--output nil
           mega-dap--greeted nil
-          mega-dap--process
-          (make-process :name "mega-dap" :buffer buffer :stderr errors
-                        :command command :connection-type 'pipe
-                        :coding 'binary :noquery t
-                        :filter #'mega-dap--filter
-                        :sentinel #'mega-dap--sentinel))
-    (process-put mega-dap--process 'mega-dap-errors errors)
-    (when-let* ((stderr (get-buffer-process errors)))
-      (set-process-query-on-exit-flag stderr nil)
-      (set-process-sentinel stderr #'ignore))
+          mega-dap--bytes (generate-new-buffer " *mega-dap*" t))
+    (with-current-buffer mega-dap--bytes (set-buffer-multibyte nil))
+    (setq mega-dap--process
+          (mega-exec-open program (plist-get properties :arguments)
+                          :directory root :name "mega-dap"
+                          :filter #'mega-dap--filter
+                          :sentinel #'mega-dap--sentinel))
     (with-current-buffer (get-buffer-create mega-dap-info-buffer)
       (mega-dap-info-mode))
     (display-buffer mega-dap-info-buffer

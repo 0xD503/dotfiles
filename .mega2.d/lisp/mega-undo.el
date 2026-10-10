@@ -22,8 +22,9 @@
 ;;
 ;; Privacy.  A history contains text you deleted.  It is kept in MEGA's
 ;; state directory, which only you can read; none is kept for a file
-;; `mega-private-file-p' recognises, for commit messages, or for temporary
-;; files; and one that has not been used for `mega-undo-keep-days' days is
+;; `mega-forgettable-file-p' recognises, which is private files, commit
+;; messages and temporary files; and one that has not been used for
+;; `mega-undo-keep-days' days is
 ;; deleted.  `M-x mega-undo-forget' deletes the history of the current file
 ;; now, `M-x mega-undo-forget-all' all of them.
 ;;
@@ -74,10 +75,10 @@ Every save of a file with a history hashes its whole text."
   :type '(choice (const :tag "Keep for ever" nil) natnum)
   :group 'mega)
 
-(defcustom mega-undo-exclude-regexps
-  '("COMMIT_EDITMSG\\'" "git-rebase-todo\\'" "\\`/tmp/" "\\`/var/tmp/")
+(defcustom mega-undo-exclude-regexps nil
   "No undo history is kept for a file whose name matches one of these.
-Files `mega-private-file-p' recognises are left out as well."
+This is in addition to the files `mega-forgettable-file-p' recognises:
+private ones, temporary ones, commit messages."
   :type '(repeat regexp)
   :group 'mega)
 
@@ -226,7 +227,11 @@ admits positions, insertions and deletions, and so no function call."
                   (or (and (integerp record) (> record 0))
                       (and (consp record)
                            (integerp (cdr record))
-                           (or (and (stringp (car record)) (/= (cdr record) 0))
+                           (or (and (stringp (car record)) (/= (cdr record) 0)
+                                    ;; Text only.  A property can carry a
+                                    ;; form that display or editing would
+                                    ;; evaluate.
+                                    (null (object-intervals (car record))))
                                (and (integerp (car record))
                                     (<= 1 (car record) (cdr record)))))))
                 (cdr group))))
@@ -268,13 +273,11 @@ must be the text the history was taken from."
        buffer-file-name
        (not (buffer-base-buffer))
        (<= (buffer-size) mega-undo-max-file-size)
-       (not (mega-private-file-p buffer-file-name))
+       (not (mega-forgettable-file-p buffer-file-name))
        (let ((name (expand-file-name buffer-file-name))
              (case-fold-search nil))
-         (not (or (string-prefix-p (expand-file-name mega-state-dir) name)
-                  (string-prefix-p (expand-file-name mega-cache-dir) name)
-                  (seq-some (lambda (regexp) (string-match-p regexp name))
-                            mega-undo-exclude-regexps))))))
+         (not (seq-some (lambda (regexp) (string-match-p regexp name))
+                        mega-undo-exclude-regexps)))))
 
 (defun mega-undo--fingerprint ()
   "What identifies the text of the current buffer: (HASH SIZE)."
@@ -307,7 +310,9 @@ must be the text the history was taken from."
   (with-temp-buffer
     (let ((coding-system-for-read 'utf-8-emacs-unix))
       (insert-file-contents file))
-    (let ((header (read (current-buffer))))
+    ;; No shared or circular structure: nothing written by MEGA has any.
+    (let* ((read-circle nil)
+           (header (read (current-buffer))))
       (when (equal header `(mega-undo 1 ,@fingerprint))
         (let ((groups (read (current-buffer))))
           (and (mega-undo--valid-p groups) groups))))))
@@ -385,9 +390,6 @@ history for."
 
 ;;;; The doctor
 
-(declare-function mega-doctor-heading "mega-doctor")
-(declare-function mega-doctor-row "mega-doctor")
-(declare-function mega-doctor-check "mega-doctor")
 
 (defun mega-undo--doctor ()
   "Insert the doctor's section about undo."

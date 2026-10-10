@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'mega-test-helper)
+(require 'project)
 (require 'mega-search)
 (require 'ert-x)
 
@@ -75,7 +76,7 @@ each containing the word needle in a different case."
                    '("rg" "--line-number" "--no-heading" "--color=never"
                      "--max-columns=300" "--max-columns-preview"
                      "--ignore-case" "--hidden" "--glob=!.git"
-                     "--regexp=needle" ".")))
+                     "--no-require-git" "--regexp=needle" ".")))
     (let ((mega-search-hidden nil) (mega-search-ignored t)
           (mega-search-literal t) (mega-search-word t))
       (should (equal (mega-search-command 'rg "Needle" '("src/*.rs"))
@@ -107,9 +108,44 @@ each containing the word needle in a different case."
                    '("grep" "--recursive" "--line-number"
                      "--binary-files=without-match" "--color=never"
                      "--exclude-dir=.git" "--perl-regexp" "--ignore-case"
-                     "--regexp=needle" ".")))
+                     "--regexp=needle" "--" ".")))
     (let ((mega-search-hidden nil))
-      (should (member "--exclude-dir=.*" (mega-search-command 'grep "x" nil))))))
+      (should (member "--exclude-dir=.*" (mega-search-command 'grep "x" nil))))
+    ;; A path that begins with a dash is still a path.
+    (should (equal (last (mega-search-command 'grep "x" '("-rf")) 2)
+                   '("--" "-rf")))))
+
+(ert-deftest mega-search-a-project-without-version-control-is-searched-without-its-build ()
+  "Nothing tells ripgrep to skip target/ there, so MEGA does."
+  (mega-test-with-directory dir
+    (mega-test-write (expand-file-name "Cargo.toml" dir) "[package]" "")
+    (mega-test-write (expand-file-name "src/main.rs" dir) "fn needle() {}" "")
+    (mega-test-write (expand-file-name "target/debug/main.d" dir) "needle: src/main.rs" "")
+    (mega-test-write (expand-file-name "notes/target.txt" dir) "needle in a note" "")
+    (mega-test-write (expand-file-name ".gitignore" dir) "scratch.txt" "")
+    (mega-test-write (expand-file-name "scratch.txt" dir) "needle, scratched" "")
+    (mega-search-test--defaults
+      (dolist (backend (seq-filter (lambda (backend) (mega-search--usable-p backend dir))
+                                   '(rg grep)))
+        (let* ((mega-search--left-out (mega-project-left-out dir))
+               (files (lambda ()
+                        (sort (mapcar (lambda (hit) (car (mega-search-parse hit)))
+                                      (mega-search-run "needle" dir backend))
+                              #'string<))))
+          (should (member "target" mega-search--left-out))
+          (should (equal (funcall files)
+                         (if (eq backend 'rg)
+                             '("notes/target.txt" "src/main.rs")
+                           ;; grep knows nothing of ignore files.
+                           '("notes/target.txt" "scratch.txt" "src/main.rs"))))
+          ;; Asking for ignored files brings them back.
+          (let ((mega-search-ignored t))
+            (should (member "target/debug/main.d" (funcall files)))))))
+    ;; In a checkout its own rules decide, and MEGA adds none.  (Emacs
+    ;; remembers for two seconds that a directory was no checkout.)
+    (mega-test-write (expand-file-name ".git/HEAD" dir) "ref: refs/heads/main" "")
+    (let ((project-vc-cache-timeout 0))
+      (should-not (mega-project-left-out dir)))))
 
 (ert-deftest mega-search-a-pattern-is-one-argument-whatever-it-contains ()
   (mega-search-test--defaults

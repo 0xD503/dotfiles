@@ -51,10 +51,16 @@
 
 ;;;; What the page knows
 
+(defvar mega-home--started nil
+  "When starting was over: noted once, at the end of `emacs-startup-hook'.")
+
 (defun mega-home-startup-time ()
-  "How long Emacs took to start, in milliseconds, or nil if still starting."
-  (when (and before-init-time after-init-time)
-    (* 1000.0 (float-time (time-subtract after-init-time before-init-time)))))
+  "How long starting took, in milliseconds, or nil if still starting.
+From Emacs opening its first init file to the end of what MEGA put off
+until Emacs had started: all of what is waited for before the first key,
+not only the part Emacs itself calls init."
+  (when (and before-init-time mega-home--started)
+    (* 1000.0 (float-time (time-subtract mega-home--started before-init-time)))))
 
 (defun mega-home-projects ()
   "Recent projects that can be opened right now, most recent first.
@@ -240,6 +246,7 @@ no file, no directory, no buffer of its own choosing."
 
 (defun mega-home-at-startup ()
   "Open on the home page, unless Emacs was started on something else."
+  (setq mega-home--started (current-time))
   (when (mega-home--wanted-p)
     (mega-home)))
 

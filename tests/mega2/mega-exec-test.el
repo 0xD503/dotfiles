@@ -152,6 +152,119 @@
     (funcall (process-sentinel process) process "finished\n")
     (should (= (length answers) 1))))
 
+;;;; Bounded by the timeout, input included
+
+(ert-deftest mega-exec-a-program-that-will-not-take-its-input-is-given-up-on ()
+  "More input than a pipe holds, to a program that never reads: the
+timeout has to cover the sending too, or the wait would never start."
+  (let* ((start (float-time))
+         (result (mega-exec-run "sleep" '("20")
+                                :input (make-string 300000 ?x) :timeout 0.5)))
+    (should (< (- (float-time) start) 5))
+    (should (eq (plist-get result :stopped) 'timeout))
+    (should-not (plist-get result :status))
+    (should-not (mega-exec-test--leftovers))))
+
+(ert-deftest mega-exec-start-gives-up-on-a-program-that-will-not-take-its-input ()
+  (let* ((mega-exec-input-seconds 0.5)
+         (result nil)
+         (start (float-time))
+         (process (mega-exec-start "sleep" '("20")
+                                   :input (make-string 300000 ?x)
+                                   :then (lambda (answer) (setq result answer)))))
+    (should (mega-test-wait-for (lambda () result)))
+    (should (< (- (float-time) start) 5))
+    (should (eq (plist-get result :stopped) 'timeout))
+    (should-not (process-live-p process))
+    (should-not (mega-exec-test--leftovers))))
+
+(ert-deftest mega-exec-a-program-that-cannot-be-started-leaves-nothing-behind ()
+  (let ((before (length (buffer-list))))
+    (should-error (mega-exec-run "mega-test-no-such-program" nil))
+    (should-error (mega-exec-start "mega-test-no-such-program" nil))
+    (should-error (mega-exec-open "mega-test-no-such-program" nil))
+    (should (= (length (buffer-list)) before))))
+
+;;;; Where a program runs
+
+(ert-deftest mega-exec-here-means-this-machine-whatever-the-buffer-visits ()
+  "In a buffer of a file on another machine, a program of your desk still
+runs on your desk.  The host named here does not exist: reaching for it
+would fail, or hang."
+  (let ((default-directory "/ssh:mega-test.invalid:/srv/project/"))
+    (let ((result (mega-exec-run "pwd" nil :here t :timeout 10)))
+      (should (eql (plist-get result :status) 0))
+      (should (equal (plist-get result :output)
+                     (concat (directory-file-name (expand-file-name "~")) "\n"))))
+    (let (result)
+      (mega-exec-start "pwd" nil :here t :then (lambda (answer) (setq result answer)))
+      (should (mega-test-wait-for (lambda () result)))
+      (should (eql (plist-get result :status) 0)))))
+
+(ert-deftest mega-exec-here-and-local-both-stay-out-of-the-container ()
+  (mega-exec-test--in-context
+      (list :kind 'test
+            :wrap (lambda (program args _directory)
+                    (append (list "env" "MEGA_TEST_WRAPPED=yes" program) args)))
+    (let ((script '("-c" "echo ${MEGA_TEST_WRAPPED:-no}")))
+      (should (equal (plist-get (mega-exec-run "sh" script) :output) "yes\n"))
+      (should (equal (plist-get (mega-exec-run "sh" script :local t) :output) "no\n"))
+      (should (equal (plist-get (mega-exec-run "sh" script :here t) :output) "no\n")))))
+
+(ert-deftest mega-exec-the-environment-asked-for-reaches-the-program ()
+  (let ((mega-exec-environment '("MEGA_TEST_SETTING=asked for")))
+    (should (equal (plist-get (mega-exec-run "sh" '("-c" "echo $MEGA_TEST_SETTING"))
+                              :output)
+                   "asked for\n")))
+  ;; And only while it is asked for.
+  (should (equal (plist-get (mega-exec-run "sh" '("-c" "echo ${MEGA_TEST_SETTING:-unset}"))
+                            :output)
+                 "unset\n")))
+
+(ert-deftest mega-exec-contexts-are-told-apart-for-what-is-remembered ()
+  (let ((mega-exec-context-functions nil))
+    (should (eq (mega-exec-context-key "/tmp/") 'here)))
+  (mega-exec-test--in-context '(:kind test :name "box" :key "abc123")
+    (should (equal (mega-exec-context-key "/tmp/") "abc123")))
+  ;; One that names no key is still not mistaken for this machine.
+  (mega-exec-test--in-context '(:kind test :name "box")
+    (should (equal (mega-exec-context-key "/tmp/") "box"))))
+
+;;;; A conversation
+
+(ert-deftest mega-exec-open-hands-over-what-the-program-says-as-it-comes ()
+  (let* ((heard "") (ended 0)
+         (process (mega-exec-open "sh" '("-c" "echo ready; echo oops >&2; cat")
+                                  :filter (lambda (_process bytes)
+                                            (setq heard (concat heard bytes)))
+                                  :sentinel (lambda (_process) (setq ended (1+ ended))))))
+    (should (mega-test-wait-for (lambda () (equal heard "ready\n"))))
+    (process-send-string process "héllo\n")
+    ;; Bytes, as a protocol needs them: not decoded, not split by lines.
+    (should (mega-test-wait-for
+             (lambda () (equal heard (concat "ready\n" (encode-coding-string "héllo\n" 'utf-8))))))
+    (should-not (multibyte-string-p heard))
+    ;; What it writes to its error output is not part of the conversation.
+    (should-not (string-match-p "oops" heard))
+    (mega-exec-stop process)
+    (should (mega-test-wait-for (lambda () (= ended 1))))
+    (accept-process-output nil 0.1)
+    (should (= ended 1))
+    (should-not (mega-exec-test--leftovers))))
+
+(ert-deftest mega-exec-open-reports-a-mistake-in-the-callers-functions ()
+  (let ((said nil) (ended nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest arguments)
+                 (push (apply #'format-message format arguments) said))))
+      (mega-exec-open "sh" '("-c" "echo ready")
+                      :filter (lambda (&rest _) (error "Filter's bug"))
+                      :sentinel (lambda (_) (setq ended t) (error "Sentinel's bug")))
+      (should (mega-test-wait-for (lambda () ended)))
+      (accept-process-output nil 0.1))
+    (should (seq-some (lambda (line) (string-match-p "Filter.s bug" line)) said))
+    (should (seq-some (lambda (line) (string-match-p "Sentinel.s bug" line)) said))))
+
 ;;;; Not waiting
 
 (ert-deftest mega-exec-start-returns-at-once-and-answers-later ()

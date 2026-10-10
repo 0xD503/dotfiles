@@ -170,10 +170,40 @@ closed its input: the whole test run would end without a word."
       (setq buffer-file-name nil))))
 
 (ert-deftest mega-format-no-formatter-whose-configuration-is-a-program ()
-  (should-not (seq-some (lambda (entry)
-                          (seq-some (lambda (command) (equal (car command) "prettier"))
-                                    (cdr entry)))
-                        mega-formatters)))
+  (let ((programs (mapcan (lambda (spec)
+                            (mapcar #'car (plist-get (cdr spec) :formatters)))
+                          mega-languages)))
+    ;; The table is not empty, or this would prove nothing.
+    (should (member "rustfmt" programs))
+    (should-not (member "prettier" programs))
+    (should-not (member "eslint" programs))))
+
+(ert-deftest mega-format-a-formatter-of-your-own-comes-before-the-language-s ()
+  (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
+    (let ((mega-exec-context-functions nil))
+      (with-temp-buffer
+        (let ((inhibit-message t)) (python-mode))
+        (should (equal (car (mega-format-command)) "ruff"))
+        (let ((mega-formatters '(((python-base-mode) ("yapf")))))
+          (should (equal (mega-format-command) '("yapf"))))
+        ;; A mode no language row knows gets one this way, and only this way.
+        (text-mode)
+        (should-not (mega-format-command))
+        (let ((mega-formatters '(((text-mode) ("fmt" "-w" "72")))))
+          (should (equal (mega-format-command) '("fmt" "-w" "72"))))))))
+
+(ert-deftest mega-format-every-language-that-had-a-formatter-still-has-it ()
+  (cl-letf (((symbol-function 'mega-exec-find) (lambda (&rest _) t)))
+    (dolist (expected '((c-mode . "clang-format") (c++-ts-mode . "clang-format")
+                        (rust-ts-mode . "rustfmt") (mega-rust-mode . "rustfmt")
+                        (python-ts-mode . "ruff") (sh-mode . "shfmt")
+                        (bash-ts-mode . "shfmt") (go-ts-mode . "gofmt")
+                        (mega-zig-mode . "zig") (lua-mode . "stylua")
+                        (conf-toml-mode . "taplo") (toml-ts-mode . "taplo")
+                        (js-mode . nil) (mega-markdown-mode . nil)))
+      (should (equal (cons (car expected)
+                           (car (car (mega-lang-get :formatters (car expected)))))
+                     expected)))))
 
 (ert-deftest mega-format-replaces-the-buffer-with-the-formatters-output ()
   (mega-format-test--with-formatter "tr a-z A-Z"
@@ -212,6 +242,32 @@ closed its input: the whole test run would end without a word."
                      "mega-test-fmt failed: syntax error on line 3"))
       (should-not (mega-format-buffer))
       (should (equal (buffer-string) "precious\n")))))
+
+(ert-deftest mega-format-a-formatter-that-will-not-read-is-given-up-on ()
+  "A file larger than a pipe holds, and a formatter that never reads it."
+  (mega-format-test--with-formatter "sleep 30"
+    (with-temp-buffer
+      (text-mode)
+      (insert (make-string 300000 ?x))
+      (let ((mega-format-timeout 0.5)
+            (start (float-time)))
+        (should (string-match-p "took more than" (mega-format-run '("mega-test-fmt"))))
+        (should (< (- (float-time) start) 5))
+        (should (= (buffer-size) 300000))))))
+
+(ert-deftest mega-format-interrupting-the-formatter-does-not-interrupt-the-save ()
+  "C-g while a formatter hangs means stop formatting.  The file is saved."
+  (mega-format-test--with-formatter "cat"
+    (let ((file (expand-file-name "notes.txt" dir))
+          (inhibit-message t))
+      (cl-letf (((symbol-function 'mega-format-buffer)
+                 (lambda (&rest _) (signal 'quit nil))))
+        (mega-test-visiting buffer file
+          (insert "precious\n")
+          (save-buffer)
+          (should-not (buffer-modified-p))))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string))
+                     "precious\n")))))
 
 (ert-deftest mega-format-a-formatter-that-prints-nothing-changes-nothing ()
   "Empty output is a formatter that did not work, not an empty file."

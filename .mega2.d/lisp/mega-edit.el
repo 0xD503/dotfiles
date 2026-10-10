@@ -98,32 +98,55 @@ what the mode had there, such as sending a buffer to an interpreter."
                          (save-excursion (goto-char end) (line-end-position))
                          'mega-edit-changed t))))
 
+(defcustom mega-edit-trim-except-modes
+  '(mega-markdown-mode markdown-mode markdown-ts-mode diff-mode)
+  "Modes in which trailing whitespace is left alone on save.
+In Markdown two spaces at the end of a line are a line break, and in a
+diff they are part of what is being compared.  A project's
+.editorconfig, when it says anything about it, decides instead."
+  :type '(repeat symbol)
+  :group 'mega)
+
+(defvar editorconfig-properties-hash)
+
+(defun mega-edit-trim-wanted-p ()
+  "Non-nil if trailing whitespace should be removed from this buffer on save.
+The project decides, if its .editorconfig says anything
+\(`trim_trailing_whitespace\='); otherwise MEGA does, by the mode."
+  (pcase (and (bound-and-true-p editorconfig-properties-hash)
+              (gethash 'trim_trailing_whitespace editorconfig-properties-hash))
+    ("false" nil)
+    ("true" t)
+    (_ (not (apply #'derived-mode-p mega-edit-trim-except-modes)))))
+
 (defun mega-edit-trim-changed-lines ()
   "Remove trailing whitespace from the lines changed since the last save.
 The line the cursor is on keeps whitespace before the cursor, so saving
-in the middle of typing does not pull the cursor back."
+in the middle of typing does not pull the cursor back.  Nothing is
+removed where `mega-edit-trim-wanted-p' says no."
   (save-excursion
     (save-restriction
       (widen)
-      (let ((position (point-min)) (point (point)))
-        (while (setq position (text-property-any position (point-max)
-                                                 'mega-edit-changed t))
-          (let ((end (copy-marker (or (next-single-property-change
-                                       position 'mega-edit-changed)
-                                      (point-max)))))
-            (goto-char position)
-            (while (< (point) end)
-              (end-of-line)
-              (let ((line-end (point)))
-                (skip-chars-backward " \t")
-                (when (and (< (point) line-end)
-                           (not (and (>= point (point)) (<= point line-end))))
-                  (delete-region (point) line-end)))
-              (forward-line 1))
-            (setq position (marker-position end))
-            (set-marker end nil)))
-        (with-silent-modifications
-          (remove-text-properties (point-min) (point-max) '(mega-edit-changed nil)))))))
+      (when (mega-edit-trim-wanted-p)
+        (let ((position (point-min)) (point (point)))
+          (while (setq position (text-property-any position (point-max)
+                                                   'mega-edit-changed t))
+            (let ((end (copy-marker (or (next-single-property-change
+                                         position 'mega-edit-changed)
+                                        (point-max)))))
+              (goto-char position)
+              (while (< (point) end)
+                (end-of-line)
+                (let ((line-end (point)))
+                  (skip-chars-backward " \t")
+                  (when (and (< (point) line-end)
+                             (not (and (>= point (point)) (<= point line-end))))
+                    (delete-region (point) line-end)))
+                (forward-line 1))
+              (setq position (marker-position end))
+              (set-marker end nil)))))
+      (with-silent-modifications
+        (remove-text-properties (point-min) (point-max) '(mega-edit-changed nil))))))
 
 (define-minor-mode mega-edit-trim-mode
   "Remove trailing whitespace on save, from the lines you changed only."
@@ -248,12 +271,9 @@ help, and wherever no clipboard is reachable."
   (ignore-errors
     (when-let* ((command (car (mega-clipboard--tool))))
       (setq mega-clipboard--last text)
-      ;; Not waited for: xclip stays alive to serve the selection.
-      (let ((process (make-process :name "mega-clipboard" :buffer nil
-                                   :command command :connection-type 'pipe
-                                   :noquery t :sentinel #'ignore)))
-        (process-send-string process text)
-        (process-send-eof process)))))
+      ;; Not waited for: xclip stays alive to serve the selection.  And on
+      ;; this machine, where the clipboard is, whatever file is being edited.
+      (mega-exec-start (car command) (cdr command) :here t :input text))))
 
 (defun mega-clipboard-paste ()
   "Return the text of the system clipboard, if it is new.
@@ -262,7 +282,7 @@ the kill ring, with its history.  Never signals."
   (ignore-errors
     (when-let* ((command (cdr (mega-clipboard--tool))))
       (let* ((result (mega-exec-run (car command) (cdr command)
-                                    :local t :timeout 1))
+                                    :here t :timeout 1))
              (text (plist-get result :output)))
         (when (and (eql (plist-get result :status) 0)
                    (not (string-empty-p text))
