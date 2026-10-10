@@ -36,8 +36,9 @@ HAND_COPY=".bashrc.local .zshrc.local .mega.d/local.el .mega2.d/local.el
 .gitconfig.local .gitconfig.signing"
 
 # Where update.sh clones Oh my tmux! from. Read from the script, so that the
-# `tmux` tests redirect the very URL it uses.
+# `tmux` tests redirect the very URL it uses. The same for chemacs2.
 OMT_URL=$(sed -n 's/^OMT_URL="\(.*\)"$/\1/p' "$UPDATE_SH")
+CHEMACS_URL=$(sed -n 's/^CHEMACS_URL="\(.*\)"$/\1/p' "$UPDATE_SH")
 
 # mkdir, not mktemp: it is POSIX, and it fails rather than reuse a directory.
 TEST_TMP="${TMPDIR:-/tmp}/update-sh-tests.$$"
@@ -55,6 +56,9 @@ GIT_CONFIG_NOSYSTEM=1
 GIT_CEILING_DIRECTORIES=$TEST_TMP
 export LC_ALL GIT_CONFIG_NOSYSTEM GIT_CEILING_DIRECTORIES
 unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_DIR GIT_WORK_TREE
+# update.sh keeps its lists under the state directory and removes what MEGA
+# built under the cache directory: both must be the sandbox's, not yours.
+unset XDG_STATE_HOME XDG_CACHE_HOME
 
 # --- harness ----------------------------------------------------------------
 
@@ -221,6 +225,35 @@ fake_oh_my_tmux() {
 upstream_commit() {
     git -C "$UPSTREAM" -c user.name=test -c user.email=test@example.com \
         commit -q --allow-empty -m "$1" || fail "cannot commit upstream"
+}
+
+# The same for chemacs2: a local repo that holds a chemacs.el.
+fake_chemacs2() {
+    need_git
+    [ -n "$CHEMACS_URL" ] || fail "cannot find CHEMACS_URL in $UPDATE_SH"
+    UPSTREAM="$SANDBOX/chemacs2"
+    git init -q "$UPSTREAM" 2>/dev/null || fail "cannot create the upstream"
+    put "$UPSTREAM/chemacs.el" ';;; chemacs.el --- a stand-in'
+    put "$UPSTREAM/init.el" '(load "chemacs")'
+    git -C "$UPSTREAM" add chemacs.el init.el
+    upstream_commit 'first'
+    git config --file "$HOME/.gitconfig" "url.$UPSTREAM.insteadOf" "$CHEMACS_URL"
+    GIT_ALLOW_PROTOCOL=file
+    export GIT_ALLOW_PROTOCOL
+}
+
+# Put a small MEGA 2.0 into the sandbox repo: three files, and the stub of
+# local.el that the sandbox has already.
+with_mega2() {
+    put "$REPO/.mega2.d/init.el" 'init v1'
+    put "$REPO/.mega2.d/lisp/a.el" 'a v1'
+    put "$REPO/.mega2.d/lisp/b.el" 'b v1'
+    track
+}
+
+# The list update.sh keeps of what it installed of the tree named $1.
+installed_list() {
+    printf '%s\n' "$HOME/.local/state/dotfiles/$1.files"
 }
 
 # --- command line -----------------------------------------------------------
@@ -803,6 +836,504 @@ test_tmux_refuses_a_clone_of_something_else() {
     assert_err "update.sh: $HOME/.tmux is a git clone, but not of Oh my tmux!"
     assert_holds "$HOME/.tmux/.tmux.conf" '# my own tmux configuration'
     assert_absent "$HOME/.tmux.conf"
+}
+
+# --- install and uninstall: the command line ---------------------------------
+
+test_install_needs_a_name() {
+    run install
+    assert_exit 2
+    assert_err "update.sh: install what? One or more of: mega2 mega tmux chemacs2"
+    run uninstall -n
+    assert_exit 2
+    assert_err "update.sh: uninstall what? One or more of: mega2 mega tmux chemacs2"
+}
+
+test_install_refuses_a_name_it_does_not_know() {
+    run install emacs
+    assert_exit 2
+    assert_err "update.sh: install knows nothing called 'emacs'; it knows: mega2 mega tmux chemacs2"
+    assert_absent "$HOME/.rc"
+    # One wrong name among right ones: nothing at all is done.
+    with_mega2
+    run install mega2 vim
+    assert_exit 2
+    assert_absent "$HOME/.mega2.d"
+}
+
+test_help_names_what_can_be_installed() {
+    run help
+    assert_exit 0
+    assert_out_has "install NAME..."
+    assert_out_has "uninstall NAME..."
+    for name in mega2 mega chemacs2 tmux; do
+        grep -q "^  $name  " "$OUT" || fail "the help does not list: $name"
+    done
+}
+
+# --- install: a tree of this repo ---------------------------------------------
+
+test_install_mega2_installs_it_and_nothing_else() {
+    with_mega2
+    run install mega2
+    assert_exit 0
+    assert_out "Installing mega2 into $HOME/.mega2.d" \
+        "  create  .mega2.d/init.el" \
+        "  create  .mega2.d/lisp/a.el" \
+        "  create  .mega2.d/lisp/b.el" \
+        "Done: 3 file(s) changed."
+    assert_holds "$HOME/.mega2.d/init.el" 'init v1'
+    assert_holds "$HOME/.mega2.d/lisp/a.el" 'a v1'
+    # Not the rest of the repo, not the other tree, not the per-machine stub.
+    assert_absent "$HOME/.rc"
+    assert_absent "$HOME/.mega.d"
+    assert_absent "$HOME/.mega2.d/local.el"
+    assert_no_backup
+    # And it wrote down what it installed.
+    printf '%s\n' .mega2.d/init.el .mega2.d/lisp/a.el .mega2.d/lisp/b.el |
+        cmp -s - "$(installed_list mega2)" || fail "the list of what was installed is wrong"
+}
+
+test_install_twice_changes_nothing() {
+    with_mega2
+    run install mega2
+    run install mega2
+    assert_exit 0
+    assert_out "Already up to date."
+    assert_no_out "  create  "
+}
+
+test_install_takes_several_names() {
+    with_mega2
+    run install mega2 mega
+    assert_exit 0
+    assert_out "Installing mega2 into $HOME/.mega2.d" "Installing mega into $HOME/.mega.d"
+    assert_holds "$HOME/.mega2.d/init.el" 'init v1'
+    assert_holds "$HOME/.mega.d/init.el" 'init v1'
+    assert_absent "$HOME/.rc"
+}
+
+test_install_dry_run_writes_nothing() {
+    with_mega2
+    run install mega2 -n
+    assert_exit 0
+    assert_out "  create  .mega2.d/init.el" "Done: 3 file(s) would change."
+    assert_absent "$HOME/.mega2.d"
+    assert_absent "$HOME/.local"
+}
+
+test_an_update_removes_what_the_new_version_no_longer_has() {
+    with_mega2
+    put "$REPO/.mega2.d/lisp/old/deep/gone.el" 'gone v1'
+    track
+    run install mega2
+    assert_exit 0
+    # The next version: one file changed, one added, two gone.
+    put "$REPO/.mega2.d/init.el" 'init v2'
+    put "$REPO/.mega2.d/lisp/c.el" 'c v2'
+    rm -rf -- "$REPO/.mega2.d/lisp/b.el" "$REPO/.mega2.d/lisp/old"
+    track
+    run install mega2
+    assert_exit 0
+    assert_out "  update  .mega2.d/init.el" \
+        "  create  .mega2.d/lisp/c.el" \
+        "  remove  .mega2.d/lisp/b.el" \
+        "  remove  .mega2.d/lisp/old/deep/gone.el" \
+        "Done: 4 file(s) changed."
+    assert_holds "$HOME/.mega2.d/init.el" 'init v2'
+    assert_holds "$HOME/.mega2.d/lisp/a.el" 'a v1'
+    assert_holds "$HOME/.mega2.d/lisp/c.el" 'c v2'
+    assert_absent "$HOME/.mega2.d/lisp/b.el"
+    # The directories the old version alone had are gone with their files.
+    assert_absent "$HOME/.mega2.d/lisp/old"
+    # Nothing is lost: what was replaced and what was removed are backed up.
+    assert_backup .mega2.d/init.el 'init v1'
+    assert_backup .mega2.d/lisp/b.el 'b v1'
+    assert_backup .mega2.d/lisp/old/deep/gone.el 'gone v1'
+    printf '%s\n' .mega2.d/init.el .mega2.d/lisp/a.el .mega2.d/lisp/c.el |
+        cmp -s - "$(installed_list mega2)" || fail "the list was not brought up to date"
+}
+
+test_an_update_dry_run_removes_nothing() {
+    with_mega2
+    run install mega2
+    rm -f -- "$REPO/.mega2.d/lisp/b.el"
+    track
+    run install mega2 -n
+    assert_exit 0
+    assert_out "  remove  .mega2.d/lisp/b.el" "Done: 1 file(s) would change."
+    assert_holds "$HOME/.mega2.d/lisp/b.el" 'b v1'
+    grep -F -x -q .mega2.d/lisp/b.el "$(installed_list mega2)" ||
+        fail "a dry run rewrote the list"
+    assert_no_backup
+}
+
+test_an_update_with_force_removes_without_a_backup() {
+    with_mega2
+    run install mega2
+    rm -f -- "$REPO/.mega2.d/lisp/b.el"
+    track
+    run install mega2 -f
+    assert_exit 0
+    assert_absent "$HOME/.mega2.d/lisp/b.el"
+    assert_no_backup
+}
+
+test_user_updates_a_tree_the_same_way() {
+    with_mega2
+    run user
+    assert_exit 0
+    assert_holds "$HOME/.mega2.d/lisp/b.el" 'b v1'
+    assert_holds "$HOME/.rc" 'rc v1'
+    [ -f "$(installed_list mega2)" ] || fail "'user' kept no list of the tree"
+    rm -f -- "$REPO/.mega2.d/lisp/b.el" "$REPO/.rc"
+    track
+    run user
+    assert_exit 0
+    assert_out "  remove  .mega2.d/lisp/b.el"
+    assert_absent "$HOME/.mega2.d/lisp/b.el"
+    assert_backup .mega2.d/lisp/b.el 'b v1'
+    # Outside a tree nothing is ever removed: the repo no longer tracking a
+    # dotfile does not mean you no longer want the one you have.
+    assert_holds "$HOME/.rc" 'rc v1'
+}
+
+test_install_keeps_what_is_yours_and_says_so() {
+    with_mega2
+    run install mega2
+    put "$HOME/.mega2.d/local.el" 'my settings'
+    put "$HOME/.mega2.d/lisp/mine.el" 'my module'
+    rm -f -- "$REPO/.mega2.d/lisp/b.el"
+    track
+    run install mega2
+    assert_exit 0
+    assert_out "  remove  .mega2.d/lisp/b.el" \
+        "  kept    .mega2.d/lisp/mine.el  (not from this repo)" \
+        "  kept    .mega2.d/local.el  (yours)"
+    assert_holds "$HOME/.mega2.d/local.el" 'my settings'
+    assert_holds "$HOME/.mega2.d/lisp/mine.el" 'my module'
+}
+
+test_a_copy_made_before_lists_were_kept_is_adopted() {
+    with_mega2
+    # As an older update.sh left it: the files, and no list.
+    put "$HOME/.mega2.d/init.el" 'init v0'
+    put "$HOME/.mega2.d/lisp/a.el" 'a v1'
+    put "$HOME/.mega2.d/lisp/stale.el" 'from a version long gone'
+    run install mega2
+    assert_exit 0
+    assert_out "  update  .mega2.d/init.el" \
+        "  create  .mega2.d/lisp/b.el" \
+        "  kept    .mega2.d/lisp/stale.el  (not from this repo)"
+    # Nothing says the stranger was ever ours, so it is pointed at, not removed.
+    assert_holds "$HOME/.mega2.d/lisp/stale.el" 'from a version long gone'
+    [ -f "$(installed_list mega2)" ] || fail "no list was started"
+}
+
+test_the_list_cannot_point_outside_its_tree() {
+    with_mega2
+    run user
+    assert_holds "$HOME/.rc" 'rc v1'
+    put "$HOME/precious" 'not ours to touch'
+    # Somebody, or something, writes other paths into the list.
+    printf '%s\n' .rc precious .mega2.d/../precious .mega2.d/lisp/../../.rc \
+        /etc/passwd .mega.d/init.el >> "$(installed_list mega2)"
+    run install mega2
+    assert_exit 0
+    assert_no_out "  remove  "
+    assert_holds "$HOME/.rc" 'rc v1'
+    assert_holds "$HOME/precious" 'not ours to touch'
+    assert_holds "$HOME/.mega.d/init.el" 'init v1'
+}
+
+test_install_of_a_tree_the_repo_lacks_is_an_error() {
+    run install mega2
+    assert_exit 1
+    assert_err "update.sh: this repo has no .mega2.d to install"
+    assert_absent "$HOME/.mega2.d"
+}
+
+test_a_repo_without_a_tree_does_not_empty_it() {
+    with_mega2
+    run install mega2
+    # The repo loses the whole tree: a checkout of an older branch, say.
+    rm -rf -- "$REPO/.mega2.d"
+    track
+    run user
+    assert_exit 0
+    assert_no_out "  remove  "
+    assert_holds "$HOME/.mega2.d/init.el" 'init v1'
+}
+
+test_the_lists_go_where_the_state_directory_is() {
+    with_mega2
+    XDG_STATE_HOME="$SANDBOX/state"
+    export XDG_STATE_HOME
+    run install mega2
+    assert_exit 0
+    [ -f "$SANDBOX/state/dotfiles/mega2.files" ] || fail "the list is not under XDG_STATE_HOME"
+    assert_absent "$HOME/.local"
+}
+
+test_install_points_out_an_untracked_file_of_the_tree() {
+    need_git
+    with_mega2
+    put "$REPO/.mega2.d/lisp/new.el" 'not added yet'
+    run install mega2
+    assert_exit 0
+    assert_out_has "untracked, so not deployed: .mega2.d/lisp/new.el"
+    assert_absent "$HOME/.mega2.d/lisp/new.el"
+}
+
+# --- uninstall: a tree of this repo -------------------------------------------
+
+test_uninstall_mega2_removes_what_was_installed_and_keeps_what_is_yours() {
+    with_mega2
+    run install mega2
+    put "$HOME/.mega2.d/local.el" 'my settings'
+    put "$HOME/.cache/mega2/compiled/abc/mega-lib.elc" 'built'
+    put "$HOME/.cache/mega2/eln/x.eln" 'built'
+    put "$HOME/.cache/mega2/backup/file" 'a backup of your work'
+    put "$HOME/.local/state/mega2/history" 'your history'
+    run uninstall mega2
+    assert_exit 0
+    assert_out "Removing mega2 from $HOME/.mega2.d" \
+        "  remove  .mega2.d/init.el" \
+        "  remove  .mega2.d/lisp/a.el" \
+        "  remove  .mega2.d/lisp/b.el" \
+        "  kept    .mega2.d/local.el  (not installed from here)"
+    assert_absent "$HOME/.mega2.d/init.el"
+    assert_absent "$HOME/.mega2.d/lisp"
+    assert_holds "$HOME/.mega2.d/local.el" 'my settings'
+    # What MEGA built and can build again goes; what is yours does not.
+    assert_absent "$HOME/.cache/mega2/compiled"
+    assert_absent "$HOME/.cache/mega2/eln"
+    assert_holds "$HOME/.cache/mega2/backup/file" 'a backup of your work'
+    assert_holds "$HOME/.local/state/mega2/history" 'your history'
+    assert_backup .mega2.d/init.el 'init v1'
+    assert_absent "$(installed_list mega2)"
+}
+
+test_uninstall_says_so_when_a_profile_still_points_at_it() {
+    with_mega2
+    run install mega2
+    printf '%s\n' '(("default" . ((user-emacs-directory . "~/.mega2.d")))' \
+        ' ("mega" . ((user-emacs-directory . "~/.mega.d"))))' > "$HOME/.emacs-profiles.el"
+    run uninstall mega2
+    assert_exit 0
+    assert_out "  ~/.emacs-profiles.el still names ~/.mega2.d as a profile"
+    # Not for a profile that merely has a longer name.
+    run install mega2
+    printf '%s\n' '(("default" . ((user-emacs-directory . "~/.mega2.d.old"))))' \
+        > "$HOME/.emacs-profiles.el"
+    run uninstall mega2
+    assert_exit 0
+    assert_no_out "still names"
+}
+
+test_uninstall_removes_the_directory_when_nothing_of_yours_is_in_it() {
+    with_mega2
+    run install mega2
+    run uninstall mega2
+    assert_exit 0
+    assert_absent "$HOME/.mega2.d"
+}
+
+test_after_an_uninstall_user_leaves_the_tree_alone() {
+    with_mega2
+    run install mega2
+    run uninstall mega2
+    run user
+    assert_exit 0
+    assert_out "  skip    .mega2.d  (uninstalled; 'update.sh install mega2' brings it back)"
+    assert_absent "$HOME/.mega2.d"
+    # The rest is deployed as ever, the other tree included.
+    assert_holds "$HOME/.rc" 'rc v1'
+    assert_holds "$HOME/.mega.d/init.el" 'init v1'
+    # Until it is asked for again, by name.
+    run install mega2
+    assert_exit 0
+    assert_holds "$HOME/.mega2.d/init.el" 'init v1'
+    put "$REPO/.mega2.d/init.el" 'init v2'
+    track
+    run user
+    assert_exit 0
+    assert_no_out "  skip    "
+    assert_holds "$HOME/.mega2.d/init.el" 'init v2'
+}
+
+test_uninstall_of_a_copy_made_before_lists_were_kept() {
+    with_mega2
+    put "$HOME/.mega2.d/init.el" 'init v0'
+    put "$HOME/.mega2.d/lisp/a.el" 'a v0'
+    put "$HOME/.mega2.d/lisp/stale.el" 'from a version long gone'
+    run uninstall mega2
+    assert_exit 0
+    assert_absent "$HOME/.mega2.d/init.el"
+    assert_absent "$HOME/.mega2.d/lisp/a.el"
+    assert_out "  kept    .mega2.d/lisp/stale.el  (not installed from here)"
+    assert_holds "$HOME/.mega2.d/lisp/stale.el" 'from a version long gone'
+    assert_backup .mega2.d/init.el 'init v0'
+}
+
+test_uninstall_dry_run_writes_nothing() {
+    with_mega2
+    run install mega2
+    put "$HOME/.mega2.d/local.el" 'my settings'
+    run uninstall mega2 -n
+    assert_exit 0
+    assert_out "  remove  .mega2.d/init.el" \
+        "  kept    .mega2.d/local.el  (not installed from here)" \
+        "Done: 3 file(s) would change."
+    assert_no_out "  kept    .mega2.d/init.el"
+    assert_holds "$HOME/.mega2.d/init.el" 'init v1'
+    [ -f "$(installed_list mega2)" ] || fail "a dry run removed the list"
+    assert_absent "$HOME/.local/state/dotfiles/mega2.removed"
+    run user
+    assert_no_out "  skip    "
+}
+
+test_uninstall_of_what_is_not_there_is_remembered_all_the_same() {
+    with_mega2
+    run uninstall mega2
+    assert_exit 0
+    assert_no_out "  remove  "
+    run user
+    assert_exit 0
+    assert_out "  skip    .mega2.d  (uninstalled; 'update.sh install mega2' brings it back)"
+    assert_absent "$HOME/.mega2.d"
+}
+
+# --- install and uninstall: chemacs2 ------------------------------------------
+
+test_install_chemacs2_clones_it_into_emacs_d() {
+    fake_chemacs2
+    run install chemacs2
+    assert_exit 0
+    assert_out "Installing chemacs2 into $HOME/.emacs.d" \
+        "  clone   $CHEMACS_URL" \
+        "  no ~/.emacs-profiles.el yet: 'update.sh user' installs this repo's copy" \
+        "Done: 1 file(s) changed."
+    assert_holds "$HOME/.emacs.d/chemacs.el" ';;; chemacs.el --- a stand-in'
+    assert_absent "$HOME/.rc"
+}
+
+test_install_chemacs2_twice_changes_nothing_and_then_pulls() {
+    fake_chemacs2
+    run install chemacs2
+    run install chemacs2
+    assert_exit 0
+    assert_out "Already up to date."
+    put "$UPSTREAM/chemacs.el" ';;; chemacs.el --- a newer stand-in'
+    git -C "$UPSTREAM" add chemacs.el
+    upstream_commit 'second'
+    run install chemacs2 -n
+    assert_exit 0
+    assert_out "  update  $HOME/.emacs.d" "Done: 1 file(s) would change."
+    assert_holds "$HOME/.emacs.d/chemacs.el" ';;; chemacs.el --- a stand-in'
+    run install chemacs2
+    assert_exit 0
+    assert_holds "$HOME/.emacs.d/chemacs.el" ';;; chemacs.el --- a newer stand-in'
+}
+
+test_install_chemacs2_never_touches_a_configuration_of_yours() {
+    fake_chemacs2
+    put "$HOME/.emacs.d/init.el" 'my own Emacs configuration'
+    run install chemacs2
+    assert_exit 1
+    assert_err "update.sh: $HOME/.emacs.d exists and is not a git clone; move it aside first"
+    assert_holds "$HOME/.emacs.d/init.el" 'my own Emacs configuration'
+    # Nor one that is kept in git.
+    git init -q "$HOME/.emacs.d" 2>/dev/null || fail "cannot create the clone"
+    run install chemacs2
+    assert_exit 1
+    assert_err "update.sh: $HOME/.emacs.d is a git clone, but not of chemacs2"
+    assert_holds "$HOME/.emacs.d/init.el" 'my own Emacs configuration'
+    run uninstall chemacs2
+    assert_exit 1
+    assert_err "update.sh: $HOME/.emacs.d is not a clone of chemacs2; it is left alone"
+    assert_holds "$HOME/.emacs.d/init.el" 'my own Emacs configuration'
+}
+
+test_uninstall_chemacs2_moves_it_to_the_backups() {
+    fake_chemacs2
+    run install chemacs2
+    # What Emacs wrote into it since: yours, and kept with it.
+    put "$HOME/.emacs.d/history" 'typed over the years'
+    run uninstall chemacs2
+    assert_exit 0
+    assert_out "Removing chemacs2 from $HOME/.emacs.d" "  remove  $HOME/.emacs.d"
+    assert_absent "$HOME/.emacs.d"
+    assert_backup .emacs.d/history 'typed over the years'
+    assert_backup .emacs.d/chemacs.el ';;; chemacs.el --- a stand-in'
+}
+
+test_uninstall_chemacs2_with_force_and_dry_run() {
+    fake_chemacs2
+    run install chemacs2
+    run uninstall chemacs2 -n
+    assert_exit 0
+    assert_out "  remove  $HOME/.emacs.d" "Done: 1 file(s) would change."
+    assert_holds "$HOME/.emacs.d/chemacs.el" ';;; chemacs.el --- a stand-in'
+    run uninstall chemacs2 -f
+    assert_exit 0
+    assert_absent "$HOME/.emacs.d"
+    assert_no_backup
+    # And once more, with nothing there: said, and no error.
+    run uninstall chemacs2
+    assert_exit 0
+    assert_out "  nothing at $HOME/.emacs.d" "Already up to date."
+}
+
+# --- install and uninstall: tmux ----------------------------------------------
+
+test_install_tmux_is_what_the_tmux_command_was() {
+    fake_oh_my_tmux
+    run install tmux
+    assert_exit 0
+    assert_out "Installing Oh my tmux! into $HOME/.tmux" \
+        "  clone   $OMT_URL" \
+        "  link    .tmux.conf" \
+        "Done: 2 file(s) changed."
+    assert_link "$HOME/.tmux.conf" "$HOME/.tmux/.tmux.conf"
+}
+
+test_uninstall_tmux_removes_the_clone_and_the_link() {
+    fake_oh_my_tmux
+    run install tmux
+    put "$HOME/.tmux.conf.local" 'this repo'"'"'s settings'
+    run uninstall tmux
+    assert_exit 0
+    assert_out "Removing Oh my tmux! from $HOME/.tmux" \
+        "  remove  $HOME/.tmux" \
+        "  remove  .tmux.conf" \
+        "Done: 2 file(s) changed."
+    assert_absent "$HOME/.tmux"
+    assert_absent "$HOME/.tmux.conf"
+    assert_holds "$HOME/.tmux.conf.local" 'this repo'"'"'s settings'
+    assert_backup .tmux/.tmux.conf '# https://github.com/gpakosz/.tmux'
+}
+
+test_uninstall_tmux_leaves_a_tmux_conf_of_yours() {
+    fake_oh_my_tmux
+    run install tmux
+    rm -f -- "$HOME/.tmux.conf"
+    put "$HOME/.tmux.conf" 'my own tmux configuration'
+    run uninstall tmux
+    assert_exit 0
+    assert_no_out "  remove  .tmux.conf"
+    assert_holds "$HOME/.tmux.conf" 'my own tmux configuration'
+    assert_absent "$HOME/.tmux"
+}
+
+test_uninstall_tmux_refuses_what_is_not_oh_my_tmux() {
+    need_git
+    git init -q "$HOME/.tmux" 2>/dev/null || fail "cannot create the clone"
+    put "$HOME/.tmux/.tmux.conf" '# something else entirely'
+    run uninstall tmux
+    assert_exit 1
+    assert_err "update.sh: $HOME/.tmux is not a clone of Oh my tmux!; it is left alone"
+    assert_holds "$HOME/.tmux/.tmux.conf" '# something else entirely'
 }
 
 # --- runner -----------------------------------------------------------------
