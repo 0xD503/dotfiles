@@ -448,6 +448,28 @@ Things learned while building it, worth keeping in mind:
   privacy and security checks were run against deliberately broken copies
   of the code (`MEGA_TEST_CONFIG` points the suite at a copy).
 
+## Installing and updating
+
+`update.sh` at the top of the repo installs MEGA (`install mega2`) and
+updates it by the same command; `user`, which deploys every dotfile, does the
+same for MEGA's directory. Either way `~/.mega2.d` ends up holding exactly
+the repo's files. The script keeps a list of what it installed, under
+`~/.local/state/dotfiles/`, and on the next run removes from `~/.mega2.d`
+what is on the old list and not on the new one, after backing it up; a file
+it never listed is never removed, and a list is believed only about paths
+inside the directory it belongs to. `uninstall mega2` removes what is
+listed and the compiled copies in the cache, keeps `local.el`, the state
+directory and the backups of your files, and leaves a mark so that `user`
+does not put MEGA back.
+
+What makes an update safe on MEGA's side is that nothing it keeps is
+trusted on the way back in: the trust store, workspaces, undo histories and
+approvals are data, checked when read, and ignored when they do not check,
+which costs a question asked again and never a file. The compiled copy is
+used only for the source it was made from. And MEGA writes nothing into
+`~/.mega2.d` or the repo, so there is no state there for an update to
+collide with.
+
 ## Open points
 
 - **What compiling buys**, measured on the machine the bench figures were

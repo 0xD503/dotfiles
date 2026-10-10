@@ -4,6 +4,31 @@ A terminal-first Emacs configuration that needs nothing but Emacs 31.1: no
 packages, no downloads. This page is the whole user guide. How and why it is
 built is in [DESIGN.md](DESIGN.md).
 
+## Install, update, remove
+
+From the dotfiles repo:
+
+```sh
+./update.sh install mega2      # install it, or update it: the same command
+./update.sh install chemacs2   # optional: makes MEGA what plain `emacs` starts
+./update.sh uninstall mega2    # remove it
+```
+
+Updating is safe to do at any time. `~/.mega2.d` ends up holding exactly the
+repo's files: what an older version had and this one has not is removed, and
+everything replaced or removed is first copied to `~/.dotfiles-backup/`.
+Your `local.el` is never touched. What MEGA remembers (history, undo, trusted
+projects, workspaces) lives elsewhere and is read with care: a file a newer
+MEGA cannot make sense of is ignored, never guessed at, so the worst an
+update can do is make MEGA ask or forget something once. Its compiled copy
+is rebuilt by itself. Restart Emacs afterwards: a running one goes on with
+the version it loaded. `./update.sh user`, which deploys every dotfile,
+updates MEGA the same way.
+
+Removing it takes away what was installed and what MEGA built; your
+`local.el`, your history and MEGA's backups of your files stay, and the
+command says where.
+
 ## Start
 
 ```sh
@@ -137,8 +162,9 @@ files of its directory and nothing below it.
 | Add a snippet | `mega-snippets` in `lisp/mega-snippet.el` |
 | Remove a feature | delete its line in `init.el`; its keys go with it |
 
-`local.el` is never overwritten by a plain `./update.sh` command; install it
-once with `./update.sh local user`. A project's `.editorconfig` sets its
+`local.el` is never installed or overwritten by `./update.sh install mega2`
+or `./update.sh user`; put the stub in place once with `./update.sh local
+user`. A project's `.editorconfig` sets its
 indentation and line endings, moves the ruler (`max_line_length`), and says
 whether spaces at the ends of lines are removed. A module that others are
 built on (`mega-exec`, `mega-trust`, `mega-project`, `mega-lang`) stays
