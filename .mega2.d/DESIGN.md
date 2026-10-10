@@ -7,8 +7,7 @@ The agreed requirements, feature list and architecture. The user guide is
 
 MEGA 2.0 is **self-sufficient**: it uses what Emacs ships and code written for
 MEGA, and depends on no downloadable Elisp. MEGA 1, which it replaces and
-which is gone from this repo (`update.sh uninstall mega` takes it out of a
-home directory it was deployed to), pulled about 40
+which is gone from this repo, pulled about 40
 packages and 15 tree-sitter parsers; 2.0 pulls none.
 
 | Decision | |

@@ -853,6 +853,9 @@ test_install_refuses_a_name_it_does_not_know() {
     run install emacs
     assert_exit 2
     assert_err "update.sh: install knows nothing called 'emacs'; it knows: mega2 tmux chemacs2"
+    run uninstall mega
+    assert_exit 2
+    assert_err "update.sh: uninstall knows nothing called 'mega'; it knows: mega2 tmux chemacs2"
     assert_absent "$HOME/.rc"
     # One wrong name among right ones: nothing at all is done.
     with_mega2
@@ -866,7 +869,7 @@ test_help_names_what_can_be_installed() {
     assert_exit 0
     assert_out_has "install NAME..."
     assert_out_has "uninstall NAME..."
-    for name in mega2 chemacs2 tmux mega; do
+    for name in mega2 chemacs2 tmux; do
         grep -q "^  $name  " "$OUT" || fail "the help does not list: $name"
     done
 }
@@ -1203,75 +1206,6 @@ test_uninstall_of_what_is_not_there_is_remembered_all_the_same() {
     assert_exit 0
     assert_out "  skip    .mega2.d  (uninstalled; 'update.sh install mega2' brings it back)"
     assert_absent "$HOME/.mega2.d"
-}
-
-# --- what the repo no longer carries --------------------------------------------
-
-# MEGA 1 as an earlier version of this repo deployed it, with something of
-# the user's beside what was deployed.
-with_old_mega() {
-    put "$HOME/.mega.d/init.el" 'deployed long ago'
-    put "$HOME/.mega.d/lisp/mega-core.el" 'deployed long ago'
-    put "$HOME/.mega.d/elpa/some-package/it.el" 'downloaded since'
-}
-
-test_uninstall_mega_moves_the_old_directory_to_the_backups() {
-    with_old_mega
-    run uninstall mega
-    assert_exit 0
-    assert_out "Removing mega from $HOME/.mega.d" \
-        "  remove  $HOME/.mega.d" \
-        "Done: 1 file(s) changed."
-    assert_absent "$HOME/.mega.d"
-    # All of it, what was the user's included: there to be had back.
-    assert_backup .mega.d/init.el 'deployed long ago'
-    assert_backup .mega.d/elpa/some-package/it.el 'downloaded since'
-    # And nothing else went with it.
-    run user
-    assert_exit 0
-    assert_holds "$HOME/.rc" 'rc v1'
-    assert_no_out "  old     "
-}
-
-test_uninstall_mega_dry_run_and_force() {
-    with_old_mega
-    run uninstall mega -n
-    assert_exit 0
-    assert_out "  remove  $HOME/.mega.d" "Done: 1 file(s) would change."
-    assert_holds "$HOME/.mega.d/init.el" 'deployed long ago'
-    run uninstall mega -f
-    assert_exit 0
-    assert_absent "$HOME/.mega.d"
-    assert_no_backup
-    run uninstall mega
-    assert_exit 0
-    assert_out "  nothing at $HOME/.mega.d" "Already up to date."
-}
-
-test_install_mega_says_it_is_gone() {
-    with_old_mega
-    run install mega
-    assert_exit 2
-    assert_err "update.sh: mega is no longer part of this repo; 'update.sh uninstall mega' removes what an earlier version installed"
-    assert_holds "$HOME/.mega.d/init.el" 'deployed long ago'
-}
-
-test_user_points_at_what_the_repo_no_longer_carries_and_leaves_it() {
-    with_old_mega
-    run user
-    assert_exit 0
-    assert_out "  old     .mega.d  (no longer in this repo; 'update.sh uninstall mega' removes it)"
-    assert_holds "$HOME/.mega.d/init.el" 'deployed long ago'
-    assert_holds "$HOME/.mega.d/elpa/some-package/it.el" 'downloaded since'
-}
-
-test_uninstall_mega_says_so_when_a_profile_still_points_at_it() {
-    with_old_mega
-    printf '%s\n' '(("mega" . ((user-emacs-directory . "~/.mega.d"))))' \
-        > "$HOME/.emacs-profiles.el"
-    run uninstall mega
-    assert_exit 0
-    assert_out "  ~/.emacs-profiles.el still names ~/.mega.d as a profile; 'update.sh user' brings this repo's"
 }
 
 # --- install and uninstall: chemacs2 ------------------------------------------
