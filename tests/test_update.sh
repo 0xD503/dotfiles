@@ -32,7 +32,7 @@ if [ ! -f "$UPDATE_SH" ]; then
 fi
 
 # The per-machine files, as update.sh names them in HAND_COPY_FILES.
-HAND_COPY=".bashrc.local .zshrc.local .mega.d/local.el .mega2.d/local.el
+HAND_COPY=".bashrc.local .zshrc.local .mega2.d/local.el
 .gitconfig.local .gitconfig.signing"
 
 # Where update.sh clones Oh my tmux! from. Read from the script, so that the
@@ -109,7 +109,7 @@ sandbox() {
     # configuration: the four files update.sh is expected to manage
     put "$REPO/.rc" 'rc v1'
     put "$REPO/.config/app/conf" 'conf v1'
-    put "$REPO/.mega.d/init.el" 'init v1'
+    put "$REPO/.app.d/init.el" 'init v1'
     put "$REPO/.local/bin/tool" '#!/bin/sh'
     chmod +x "$REPO/.local/bin/tool"
 
@@ -326,7 +326,7 @@ test_leaves_no_temporary_file_behind() {
 test_list_prints_the_managed_files_sorted() {
     run list
     assert_exit 0
-    assert_out_is .config/app/conf .local/bin/tool .mega.d/init.el .rc
+    assert_out_is .app.d/init.el .config/app/conf .local/bin/tool .rc
 }
 
 test_the_tests_directory_is_not_managed() {
@@ -336,8 +336,8 @@ test_the_tests_directory_is_not_managed() {
     track
     put "$REPO/tests/scratch" 'untracked'
     run list
-    assert_out_is .config/app/conf .config/tests/conf .local/bin/tool \
-        .mega.d/init.el .rc tests.conf
+    assert_out_is .app.d/init.el .config/app/conf .config/tests/conf \
+        .local/bin/tool .rc tests.conf
     run user
     assert_exit 0
     assert_absent "$HOME/tests"
@@ -352,7 +352,7 @@ test_editor_debris_is_not_managed() {
     done
     track
     run list
-    assert_out_is .config/app/conf .local/bin/tool .mega.d/init.el .rc
+    assert_out_is .app.d/init.el .config/app/conf .local/bin/tool .rc
 }
 
 test_an_untracked_file_is_not_managed_and_is_pointed_out() {
@@ -372,7 +372,7 @@ test_a_tracked_file_that_is_gone_is_not_managed() {
     need_git
     rm -- "$REPO/.rc"
     run list
-    assert_out_is .config/app/conf .local/bin/tool .mega.d/init.el
+    assert_out_is .app.d/init.el .config/app/conf .local/bin/tool
     run user
     assert_exit 0
     assert_absent "$HOME/.rc"
@@ -382,7 +382,7 @@ test_outside_git_every_file_in_the_directory_is_managed() {
     rm -rf -- "$REPO/.git"
     put "$REPO/.newrc" 'new'
     run list
-    assert_out_is .config/app/conf .local/bin/tool .mega.d/init.el .newrc .rc
+    assert_out_is .app.d/init.el .config/app/conf .local/bin/tool .newrc .rc
     run user
     assert_exit 0
     assert_holds "$HOME/.newrc" 'new'
@@ -392,7 +392,7 @@ test_outside_git_every_file_in_the_directory_is_managed() {
 }
 
 test_a_repo_without_managed_files_is_an_error() {
-    rm -- "$REPO/.rc" "$REPO/.config/app/conf" "$REPO/.mega.d/init.el" \
+    rm -- "$REPO/.rc" "$REPO/.config/app/conf" "$REPO/.app.d/init.el" \
         "$REPO/.local/bin/tool"
     track
     run user
@@ -406,9 +406,9 @@ test_user_installs_into_an_empty_home() {
     run user
     assert_exit 0
     assert_out_is "Installing into $HOME" \
+        "  create  .app.d/init.el" \
         "  create  .config/app/conf" \
         "  create  .local/bin/tool" \
-        "  create  .mega.d/init.el" \
         "  create  .rc" \
         "Done: 4 file(s) changed."
     assert_holds "$HOME/.rc" 'rc v1'
@@ -630,7 +630,7 @@ test_local_list_prints_the_per_machine_files() {
     for stub in $HAND_COPY; do
         assert_out "$stub"
     done
-    [ "$(wc -l < "$OUT")" -eq 6 ] || fail "stdout lists something else too"
+    [ "$(wc -l < "$OUT")" -eq 5 ] || fail "stdout lists something else too"
 }
 
 test_local_list_skips_a_stub_the_repo_lacks() {
@@ -644,12 +644,12 @@ test_local_list_skips_a_stub_the_repo_lacks() {
 test_local_user_installs_the_per_machine_files_only() {
     run local user
     assert_exit 0
-    assert_out "  create  .mega.d/local.el" "  create  .mega2.d/local.el" \
-        "Done: 6 file(s) changed."
-    assert_holds "$HOME/.mega.d/local.el" 'stub .mega.d/local.el'
+    assert_out "  create  .mega2.d/local.el" "  create  .bashrc.local" \
+        "Done: 5 file(s) changed."
+    assert_holds "$HOME/.mega2.d/local.el" 'stub .mega2.d/local.el'
     assert_holds "$HOME/.gitconfig.signing" 'stub .gitconfig.signing'
     assert_absent "$HOME/.rc"
-    assert_absent "$HOME/.mega.d/init.el"
+    assert_absent "$HOME/.app.d/init.el"
 }
 
 test_local_user_overwrites_a_changed_file_and_backs_it_up() {
@@ -665,7 +665,7 @@ test_local_user_dry_run_writes_nothing() {
     put "$HOME/.gitconfig.signing" 'this machine only'
     run local user -n
     assert_exit 0
-    assert_out "  update  .gitconfig.signing" "Done: 6 file(s) would change."
+    assert_out "  update  .gitconfig.signing" "Done: 5 file(s) would change."
     assert_holds "$HOME/.gitconfig.signing" 'this machine only'
     assert_absent "$HOME/.bashrc.local"
     assert_no_backup
@@ -843,16 +843,16 @@ test_tmux_refuses_a_clone_of_something_else() {
 test_install_needs_a_name() {
     run install
     assert_exit 2
-    assert_err "update.sh: install what? One or more of: mega2 mega tmux chemacs2"
+    assert_err "update.sh: install what? One or more of: mega2 tmux chemacs2"
     run uninstall -n
     assert_exit 2
-    assert_err "update.sh: uninstall what? One or more of: mega2 mega tmux chemacs2"
+    assert_err "update.sh: uninstall what? One or more of: mega2 tmux chemacs2"
 }
 
 test_install_refuses_a_name_it_does_not_know() {
     run install emacs
     assert_exit 2
-    assert_err "update.sh: install knows nothing called 'emacs'; it knows: mega2 mega tmux chemacs2"
+    assert_err "update.sh: install knows nothing called 'emacs'; it knows: mega2 tmux chemacs2"
     assert_absent "$HOME/.rc"
     # One wrong name among right ones: nothing at all is done.
     with_mega2
@@ -866,7 +866,7 @@ test_help_names_what_can_be_installed() {
     assert_exit 0
     assert_out_has "install NAME..."
     assert_out_has "uninstall NAME..."
-    for name in mega2 mega chemacs2 tmux; do
+    for name in mega2 chemacs2 tmux mega; do
         grep -q "^  $name  " "$OUT" || fail "the help does not list: $name"
     done
 }
@@ -886,7 +886,7 @@ test_install_mega2_installs_it_and_nothing_else() {
     assert_holds "$HOME/.mega2.d/lisp/a.el" 'a v1'
     # Not the rest of the repo, not the other tree, not the per-machine stub.
     assert_absent "$HOME/.rc"
-    assert_absent "$HOME/.mega.d"
+    assert_absent "$HOME/.app.d"
     assert_absent "$HOME/.mega2.d/local.el"
     assert_no_backup
     # And it wrote down what it installed.
@@ -905,11 +905,12 @@ test_install_twice_changes_nothing() {
 
 test_install_takes_several_names() {
     with_mega2
-    run install mega2 mega
+    fake_chemacs2
+    run install mega2 chemacs2
     assert_exit 0
-    assert_out "Installing mega2 into $HOME/.mega2.d" "Installing mega into $HOME/.mega.d"
+    assert_out "Installing mega2 into $HOME/.mega2.d" "Installing chemacs2 into $HOME/.emacs.d"
     assert_holds "$HOME/.mega2.d/init.el" 'init v1'
-    assert_holds "$HOME/.mega.d/init.el" 'init v1'
+    assert_holds "$HOME/.emacs.d/chemacs.el" ';;; chemacs.el --- a stand-in'
     assert_absent "$HOME/.rc"
 }
 
@@ -1037,13 +1038,13 @@ test_the_list_cannot_point_outside_its_tree() {
     put "$HOME/precious" 'not ours to touch'
     # Somebody, or something, writes other paths into the list.
     printf '%s\n' .rc precious .mega2.d/../precious .mega2.d/lisp/../../.rc \
-        /etc/passwd .mega.d/init.el >> "$(installed_list mega2)"
+        /etc/passwd .app.d/init.el >> "$(installed_list mega2)"
     run install mega2
     assert_exit 0
     assert_no_out "  remove  "
     assert_holds "$HOME/.rc" 'rc v1'
     assert_holds "$HOME/precious" 'not ours to touch'
-    assert_holds "$HOME/.mega.d/init.el" 'init v1'
+    assert_holds "$HOME/.app.d/init.el" 'init v1'
 }
 
 test_install_of_a_tree_the_repo_lacks_is_an_error() {
@@ -1118,7 +1119,7 @@ test_uninstall_says_so_when_a_profile_still_points_at_it() {
     with_mega2
     run install mega2
     printf '%s\n' '(("default" . ((user-emacs-directory . "~/.mega2.d")))' \
-        ' ("mega" . ((user-emacs-directory . "~/.mega.d"))))' > "$HOME/.emacs-profiles.el"
+        ' ("doom" . ((user-emacs-directory . "~/.config/emacs"))))' > "$HOME/.emacs-profiles.el"
     run uninstall mega2
     assert_exit 0
     assert_out "  ~/.emacs-profiles.el still names ~/.mega2.d as a profile"
@@ -1147,9 +1148,9 @@ test_after_an_uninstall_user_leaves_the_tree_alone() {
     assert_exit 0
     assert_out "  skip    .mega2.d  (uninstalled; 'update.sh install mega2' brings it back)"
     assert_absent "$HOME/.mega2.d"
-    # The rest is deployed as ever, the other tree included.
+    # The rest is deployed as ever.
     assert_holds "$HOME/.rc" 'rc v1'
-    assert_holds "$HOME/.mega.d/init.el" 'init v1'
+    assert_holds "$HOME/.app.d/init.el" 'init v1'
     # Until it is asked for again, by name.
     run install mega2
     assert_exit 0
@@ -1202,6 +1203,75 @@ test_uninstall_of_what_is_not_there_is_remembered_all_the_same() {
     assert_exit 0
     assert_out "  skip    .mega2.d  (uninstalled; 'update.sh install mega2' brings it back)"
     assert_absent "$HOME/.mega2.d"
+}
+
+# --- what the repo no longer carries --------------------------------------------
+
+# MEGA 1 as an earlier version of this repo deployed it, with something of
+# the user's beside what was deployed.
+with_old_mega() {
+    put "$HOME/.mega.d/init.el" 'deployed long ago'
+    put "$HOME/.mega.d/lisp/mega-core.el" 'deployed long ago'
+    put "$HOME/.mega.d/elpa/some-package/it.el" 'downloaded since'
+}
+
+test_uninstall_mega_moves_the_old_directory_to_the_backups() {
+    with_old_mega
+    run uninstall mega
+    assert_exit 0
+    assert_out "Removing mega from $HOME/.mega.d" \
+        "  remove  $HOME/.mega.d" \
+        "Done: 1 file(s) changed."
+    assert_absent "$HOME/.mega.d"
+    # All of it, what was the user's included: there to be had back.
+    assert_backup .mega.d/init.el 'deployed long ago'
+    assert_backup .mega.d/elpa/some-package/it.el 'downloaded since'
+    # And nothing else went with it.
+    run user
+    assert_exit 0
+    assert_holds "$HOME/.rc" 'rc v1'
+    assert_no_out "  old     "
+}
+
+test_uninstall_mega_dry_run_and_force() {
+    with_old_mega
+    run uninstall mega -n
+    assert_exit 0
+    assert_out "  remove  $HOME/.mega.d" "Done: 1 file(s) would change."
+    assert_holds "$HOME/.mega.d/init.el" 'deployed long ago'
+    run uninstall mega -f
+    assert_exit 0
+    assert_absent "$HOME/.mega.d"
+    assert_no_backup
+    run uninstall mega
+    assert_exit 0
+    assert_out "  nothing at $HOME/.mega.d" "Already up to date."
+}
+
+test_install_mega_says_it_is_gone() {
+    with_old_mega
+    run install mega
+    assert_exit 2
+    assert_err "update.sh: mega is no longer part of this repo; 'update.sh uninstall mega' removes what an earlier version installed"
+    assert_holds "$HOME/.mega.d/init.el" 'deployed long ago'
+}
+
+test_user_points_at_what_the_repo_no_longer_carries_and_leaves_it() {
+    with_old_mega
+    run user
+    assert_exit 0
+    assert_out "  old     .mega.d  (no longer in this repo; 'update.sh uninstall mega' removes it)"
+    assert_holds "$HOME/.mega.d/init.el" 'deployed long ago'
+    assert_holds "$HOME/.mega.d/elpa/some-package/it.el" 'downloaded since'
+}
+
+test_uninstall_mega_says_so_when_a_profile_still_points_at_it() {
+    with_old_mega
+    printf '%s\n' '(("mega" . ((user-emacs-directory . "~/.mega.d"))))' \
+        > "$HOME/.emacs-profiles.el"
+    run uninstall mega
+    assert_exit 0
+    assert_out "  ~/.emacs-profiles.el still names ~/.mega.d as a profile; 'update.sh user' brings this repo's"
 }
 
 # --- install and uninstall: chemacs2 ------------------------------------------

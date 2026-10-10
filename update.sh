@@ -32,7 +32,7 @@ CHANGES=0
 # machine keeps in them, and collecting would push one machine's overrides to
 # all the others. Only the `local` prefix reaches them, and only on request.
 EXCLUDES="update.sh tests README.md LICENSE .gitignore"
-HAND_COPY_FILES=".bashrc.local .zshrc.local .mega.d/local.el .mega2.d/local.el \
+HAND_COPY_FILES=".bashrc.local .zshrc.local .mega2.d/local.el \
 .gitconfig.local .gitconfig.signing"
 EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
 
@@ -54,8 +54,12 @@ CHEMACS_DIR="$HOME/.emacs.d"
 #
 # A clone is fetched from where it is published, and is the only thing here
 # that uses the network.
-TREES="mega2:.mega2.d mega:.mega.d"
+#
+# A retired tree is one this repo carried once and carries no longer. Nothing
+# installs it; `uninstall` takes away what an earlier version put in $HOME.
+TREES="mega2:.mega2.d"
 CLONES="tmux chemacs2"
+RETIRED="mega:.mega.d"
 case ${XDG_STATE_HOME-} in
     /*) STATE_DIR="$XDG_STATE_HOME/dotfiles" ;;
     *)  STATE_DIR="$HOME/.local/state/dotfiles" ;;
@@ -81,9 +85,11 @@ commands:
 
 what install and uninstall know:
   mega2      MEGA 2.0, in ~/.mega2.d: exactly the files of this repo
-  mega       MEGA 1, in ~/.mega.d, likewise
   chemacs2   the Emacs profile switcher, cloned into ~/.emacs.d
   tmux       Oh my tmux!, cloned into ~/.tmux, with ~/.tmux.conf linked to it
+
+what only uninstall knows, the repo having parted with it:
+  mega       MEGA 1, which an earlier version of this repo put in ~/.mega.d
 
 options:
   -n      dry run: print what would happen, touch nothing
@@ -101,10 +107,10 @@ Backups go to \$HOME/.dotfiles-backup/<timestamp>/ mirroring the original
 paths, so restoring is a plain copy back. That holds for what an update or
 an uninstall removes as well.
 
-'user' deploys everything the repo tracks, mega2 and mega included, unless
-one was uninstalled. For those two it also removes the files an earlier
-version installed and this one no longer has, so an update leaves nothing
-stale behind; nothing else in \$HOME is ever removed by it.
+'user' deploys everything the repo tracks, mega2 included unless it was
+uninstalled. For mega2 it also removes the files an earlier version
+installed and this one no longer has, so an update leaves nothing stale
+behind; nothing else in \$HOME is ever removed by it.
 
 The per-machine files ('$PROG local list') differ from host to host on
 purpose, so every command skips them unless it is prefixed with 'local'.
@@ -485,6 +491,12 @@ cmd_user() {
     for cu_tree in $cu_skipped; do
         note "skip    $(tree_dir "$cu_tree")  (uninstalled; '$PROG install $cu_tree' brings it back)"
     done
+    # What this repo no longer carries is not removed behind your back, and
+    # not left to be forgotten either.
+    for cu_entry in $RETIRED; do
+        [ -e "$HOME/${cu_entry#*:}" ] || continue
+        note "old     ${cu_entry#*:}  (no longer in this repo; '$PROG uninstall ${cu_entry%%:*}' removes it)"
+    done
 }
 
 cmd_repo() {
@@ -750,6 +762,48 @@ known_name() {
     return 1
 }
 
+# Print the directory of the retired tree named $1; fail if there is none.
+retired_dir() {
+    for rd_entry in $RETIRED; do
+        case $rd_entry in
+            "$1":*) printf '%s\n' "${rd_entry#*:}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# `uninstall NAME` for a retired tree. The repo no longer says which files
+# were its own, so the directory goes as a whole, and goes to the backups:
+# whatever of yours was in it is there to be had back.
+cmd_uninstall_retired() {
+    cur_name=$1
+    cur_dir=$(retired_dir "$cur_name") || return 1
+    msg "Removing $cur_name from $HOME/$cur_dir"
+
+    if [ ! -e "$HOME/$cur_dir" ] && [ ! -L "$HOME/$cur_dir" ]; then
+        note "nothing at $HOME/$cur_dir"
+    else
+        note "remove  $HOME/$cur_dir"
+        CHANGES=$((CHANGES + 1))
+        if [ "$DRY_RUN" -eq 0 ]; then
+            if [ "$NO_BACKUP" -eq 1 ]; then
+                rm -rf -- "$HOME/$cur_dir" ||
+                    { fail "cannot remove: $HOME/$cur_dir"; return 1; }
+            elif ! mkdir -p -- "$BACKUP_DIR" ||
+                ! mv -- "$HOME/$cur_dir" "$BACKUP_DIR/$cur_dir"; then
+                fail "cannot move $HOME/$cur_dir to $BACKUP_DIR/$cur_dir"
+                return 1
+            fi
+        fi
+    fi
+    # What was kept about it while it was a tree of this repo.
+    [ "$DRY_RUN" -eq 1 ] ||
+        rm -f -- "$STATE_DIR/$cur_name.files" "$STATE_DIR/$cur_name.removed"
+    if grep -F -q -e "/$cur_dir\"" "$HOME/.emacs-profiles.el" 2>/dev/null; then
+        note "~/.emacs-profiles.el still names ~/$cur_dir as a profile; '$PROG user' brings this repo's"
+    fi
+}
+
 cmd_install() {
     for ci_name in $NAMES; do
         case $ci_name in
@@ -765,7 +819,13 @@ cmd_uninstall() {
         case $ci_name in
             tmux)     cmd_uninstall_tmux ;;
             chemacs2) cmd_uninstall_chemacs2 ;;
-            *)        cmd_uninstall_tree "$ci_name" ;;
+            *)
+                if retired_dir "$ci_name" >/dev/null; then
+                    cmd_uninstall_retired "$ci_name"
+                else
+                    cmd_uninstall_tree "$ci_name"
+                fi
+                ;;
         esac
     done
 }
@@ -790,7 +850,14 @@ if { [ "$COMMAND" = install ] || [ "$COMMAND" = uninstall ]; } && [ -z "$NAMES" 
         case $1 in
             -*) break ;;
         esac
-        if ! known_name "$1"; then
+        if retired_dir "$1" >/dev/null; then
+            # Gone from the repo: there is nothing to install, and what an
+            # earlier version installed can still be taken away.
+            if [ "$COMMAND" = install ]; then
+                warn "$1 is no longer part of this repo; '$PROG uninstall $1' removes what an earlier version installed"
+                exit 2
+            fi
+        elif ! known_name "$1"; then
             warn "$COMMAND knows nothing called '$1'; it knows: $(names)"
             exit 2
         fi
