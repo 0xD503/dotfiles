@@ -31,7 +31,7 @@ CHANGES=0
 # must never deploy or collect them: deploying would overwrite whatever that
 # machine keeps in them, and collecting would push one machine's overrides to
 # all the others. Only the `local` prefix reaches them, and only on request.
-EXCLUDES="update.sh tests README.md LICENSE .gitignore"
+EXCLUDES="update.sh tests README.md LICENSE NOTICE .gitignore"
 HAND_COPY_FILES=".bashrc.local .zshrc.local .gitconfig.local .gitconfig.signing"
 EXCLUDES="$EXCLUDES $HAND_COPY_FILES"
 

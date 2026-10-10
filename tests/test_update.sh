@@ -118,6 +118,7 @@ sandbox() {
     # not configuration: update.sh must leave all of these alone
     put "$REPO/README.md" 'readme'
     put "$REPO/LICENSE" 'license'
+    put "$REPO/NOTICE" 'notice'
     put "$REPO/.gitignore" '*.log'
     put "$REPO/tests/test_update.sh" 'a test'
     for stub in $HAND_COPY; do
@@ -446,7 +447,7 @@ test_user_installs_into_an_empty_home() {
 
 test_user_leaves_out_what_is_not_configuration() {
     run user
-    for path in update.sh README.md LICENSE .gitignore tests $HAND_COPY; do
+    for path in update.sh README.md LICENSE NOTICE .gitignore tests $HAND_COPY; do
         assert_absent "$HOME/$path"
     done
 }
