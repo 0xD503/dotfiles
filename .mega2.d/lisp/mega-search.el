@@ -23,7 +23,7 @@
 ;;
 ;;   C-o c    case: smart -> ignore -> sensitive
 ;;   C-o u    include untracked files           (git)
-;;   C-o i    include files that are ignored
+;;   C-o i    include files that are ignored    (git, rg)
 ;;   C-o s    search the submodules as well     (git)
 ;;   C-o h    include hidden files              (rg, grep)
 ;;   C-o l    take the pattern literally, not as a regular expression
@@ -34,6 +34,22 @@
 ;;
 ;; The settings stay for the session.  To search only part of the project,
 ;; add a path or glob after " -- ":   handler -- src/*.rs
+;;
+;; Which files are searched is the one thing the three programs do not
+;; agree on, because only git knows what a checkout tracks:
+;;
+;;                       git grep           ripgrep           grep
+;;   tracked files       always             always            always
+;;   untracked files     C-o u (on)         always            always
+;;   ignored files       C-o i (off)        C-o i (off)       always
+;;   hidden files        always             C-o h (on)        C-o h (on)
+;;   submodules          C-o s (off)        always            always
+;;
+;; In brackets, how each starts out.  With git grep, ignored files are
+;; untracked files, so C-o i brings both; and C-o s leaves both out, since
+;; git will not search submodules and untracked files in one go.  A key
+;; that the program in use cannot act on says so, and is remembered for
+;; when you switch to one that can.
 ;;
 ;; The search always runs where the files are, on the host, even when the
 ;; project's tools live in a container.
@@ -177,7 +193,9 @@ list: PATTERN and PATHS are passed as they are, never through a shell."
          "--color=never" "--exclude-dir=.git"
          ,(if mega-search-literal "--fixed-strings" "--perl-regexp")
          ,@(when ignore-case '("--ignore-case"))
-         ,@(unless mega-search-hidden '("--exclude=.*" "--exclude-dir=.*"))
+         ;; Names of a dot and something more.  Plain ".*" would take in
+         ;; ".", the directory the search starts from, and so find nothing.
+         ,@(unless mega-search-hidden '("--exclude=.?*" "--exclude-dir=.?*"))
          ,@(unless mega-search-ignored
              (mapcar (lambda (name) (concat "--exclude-dir=" name))
                      mega-search--left-out))
@@ -224,45 +242,73 @@ than `mega-search-min-input' finds nothing, without running anything."
 
 ;;;; Changing the settings from the prompt
 
+(defconst mega-search-fixed
+  '((git  (hidden . "git grep searches hidden files always"))
+    (rg   (untracked . "ripgrep cannot tell untracked files: it searches them always")
+          (submodules . "ripgrep goes into a submodule as into any directory"))
+    (grep (untracked . "grep cannot tell untracked files: it searches them always")
+          (ignored . "grep knows no ignore files: it searches them always")
+          (submodules . "grep goes into a submodule as into any directory")))
+  "What each search program does whatever the setting, and so cannot be told.
+An alist of (PROGRAM (SETTING . WHY)...).  Only git knows what a checkout
+tracks, and only it searches hidden files unasked.")
+
+(defun mega-search--fixed (setting)
+  "Why the program in use cannot act on SETTING, or nil if it can."
+  (cdr (assq setting (cdr (assq mega-search--backend mega-search-fixed)))))
+
 (defun mega-search-describe ()
-  "One line saying how the search currently works."
-  (let ((submodules (and mega-search-submodules (eq mega-search--backend 'git))))
+  "One line saying how the search currently works.
+It names the settings that are on and that the program in use acts on:
+what a program does regardless is not a setting of it."
+  (let* ((on (lambda (setting value) (and value (not (mega-search--fixed setting)))))
+         (submodules (funcall on 'submodules mega-search-submodules))
+         (ignored (and (funcall on 'ignored mega-search-ignored) (not submodules)))
+         ;; To git, ignored files are untracked ones: asking for them brings
+         ;; both.  And with submodules it searches tracked files only.
+         (untracked (and (or (funcall on 'untracked mega-search-untracked)
+                             (and ignored (eq mega-search--backend 'git)))
+                         (not submodules))))
     (format "%s  case:%s%s%s%s%s%s%s"
             (or mega-search--backend "no search program")
             mega-search-case
-            ;; With submodules git searches tracked files only: say so
-            ;; by not claiming the other two.
-            (if (and mega-search-untracked (not submodules)) " +untracked" "")
-            (if (and mega-search-ignored (not submodules)) " +ignored" "")
+            (if untracked " +untracked" "")
+            (if ignored " +ignored" "")
             (if submodules " +submodules" "")
-            (if mega-search-hidden " +hidden" "")
+            (if (funcall on 'hidden mega-search-hidden) " +hidden" "")
             (if mega-search-literal " literal" "")
             (if mega-search-word " words" ""))))
 
-(defun mega-search--changed ()
-  "Search again with the new settings, and say what they are."
+(defun mega-search--changed (&optional setting)
+  "Search again with the new settings, and say what they are.
+SETTING, if given, is the one that was changed: when the program in use
+cannot act on it, that is said too, so that a key never does nothing
+without a word."
   (mega-pick-refresh)
-  (minibuffer-message "[%s]" (mega-search-describe)))
+  (let ((fixed (and setting (mega-search--fixed setting))))
+    (minibuffer-message (if fixed "[%s]  %s" "[%s]")
+                        (mega-search-describe) fixed)))
 
-(defmacro mega-search--define-toggle (name variable doc)
-  "Define command NAME that flips VARIABLE; DOC is its docstring."
+(defmacro mega-search--define-toggle (name variable setting doc)
+  "Define command NAME that flips VARIABLE, the setting called SETTING.
+DOC is its docstring."
   `(defun ,name ()
      ,doc
      (interactive)
      (setq ,variable (not ,variable))
-     (mega-search--changed)))
+     (mega-search--changed ',setting)))
 
-(mega-search--define-toggle mega-search-toggle-untracked mega-search-untracked
+(mega-search--define-toggle mega-search-toggle-untracked mega-search-untracked untracked
                             "Include or leave out files git does not track.")
-(mega-search--define-toggle mega-search-toggle-ignored mega-search-ignored
+(mega-search--define-toggle mega-search-toggle-ignored mega-search-ignored ignored
                             "Include or leave out ignored files.")
-(mega-search--define-toggle mega-search-toggle-submodules mega-search-submodules
+(mega-search--define-toggle mega-search-toggle-submodules mega-search-submodules submodules
                             "Search the submodules as well, or leave them out.")
-(mega-search--define-toggle mega-search-toggle-hidden mega-search-hidden
+(mega-search--define-toggle mega-search-toggle-hidden mega-search-hidden hidden
                             "Include or leave out hidden files.")
-(mega-search--define-toggle mega-search-toggle-literal mega-search-literal
+(mega-search--define-toggle mega-search-toggle-literal mega-search-literal literal
                             "Take the pattern literally, or as a regular expression.")
-(mega-search--define-toggle mega-search-toggle-word mega-search-word
+(mega-search--define-toggle mega-search-toggle-word mega-search-word word
                             "Match whole words only, or anywhere.")
 
 (defun mega-search-cycle-case ()

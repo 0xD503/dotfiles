@@ -108,9 +108,21 @@ back, and the session stays with what you chose; `(setq mega-search-backend
 `git grep` cannot search, and the next of the three that is installed does.
 
 `C-o ?` shows the settings and `C-o` plus a letter changes one: `c` case,
-`u` untracked files, `i` ignored files, `s` submodules, `h` hidden, `w` whole
-words, `e` export the hits to an editable buffer. `needle -- src/*.rs`
-searches part of the project.
+`w` whole words, `l` literal text, `e` export the hits to an editable buffer.
+`needle -- src/*.rs` searches part of the project.
+
+Which files are searched is where the three programs differ, since only git
+knows what a checkout tracks. In brackets, how each starts out:
+
+| | git grep | ripgrep | grep |
+| --- | --- | --- | --- |
+| untracked files | `C-o u` (on) | always | always |
+| ignored files | `C-o i` (off) | `C-o i` (off) | always |
+| hidden files | always | `C-o h` (on) | `C-o h` (on) |
+| submodules | `C-o s` (off) | always | always |
+
+With git grep, ignored files count as untracked, so `C-o i` brings both, and
+`C-o s` leaves both out. A key the current program cannot act on says so.
 
 **A dev container** starts in the background: Emacs stays yours while it
 does, and `*mega-container*` shows each step. Before anything from

@@ -111,7 +111,7 @@ each containing the word needle in a different case."
                      "--exclude-dir=.git" "--perl-regexp" "--ignore-case"
                      "--regexp=needle" "--" ".")))
     (let ((mega-search-hidden nil))
-      (should (member "--exclude-dir=.*" (mega-search-command 'grep "x" nil))))
+      (should (member "--exclude-dir=.?*" (mega-search-command 'grep "x" nil))))
     ;; A path that begins with a dash is still a path.
     (should (equal (last (mega-search-command 'grep "x" '("-rf")) 2)
                    '("--" "-rf")))))
@@ -214,6 +214,110 @@ each containing the word needle in a different case."
       (let ((mega-search-ignored t))
         (should (member "ignored.log"
                         (mega-search-test--files (mega-search-run "needle" dir 'git))))))))
+
+(defun mega-search-test--found (dir backend &rest settings)
+  "The files BACKEND finds needle in under DIR, with SETTINGS on.
+SETTINGS are among `untracked', `ignored' and `hidden'; the rest are off."
+  (let ((mega-search-untracked (and (memq 'untracked settings) t))
+        (mega-search-ignored (and (memq 'ignored settings) t))
+        (mega-search-hidden (and (memq 'hidden settings) t)))
+    (mega-search-test--files (mega-search-run "needle" dir backend))))
+
+(ert-deftest mega-search-which-files-each-program-searches ()
+  "The table in the Commentary of mega-search.el, tried on a real checkout.
+The programs disagree, because only git knows what is tracked: this
+holds each to what the table says of it."
+  (skip-unless (executable-find "git"))
+  (mega-search-test--defaults
+    (mega-search-test--with-repository dir
+      (let ((tracked '("src/deep/code.rs" "tracked.txt"))
+            (hidden '(".hidden/secret.txt"))
+            (untracked '("untracked.txt"))
+            (ignored '("ignored.log"))
+            ;; Of a copy: sorting rearranges the list it is given.
+            (all (lambda (&rest lists)
+                   (sort (copy-sequence (apply #'append lists)) #'string<))))
+        ;; git grep: hidden files always; untracked and ignored when asked,
+        ;; and ignored files, being untracked, bring the untracked along.
+        (should (equal (mega-search-test--found dir 'git)
+                       (funcall all tracked hidden)))
+        (should (equal (mega-search-test--found dir 'git 'hidden)
+                       (funcall all tracked hidden)))
+        (should (equal (mega-search-test--found dir 'git 'untracked)
+                       (funcall all tracked hidden untracked)))
+        (should (equal (mega-search-test--found dir 'git 'ignored)
+                       (funcall all tracked hidden untracked ignored)))
+        (should (equal (mega-search-test--found dir 'git 'untracked 'ignored)
+                       (funcall all tracked hidden untracked ignored)))
+        ;; ripgrep: untracked files always; ignored and hidden when asked.
+        (when (executable-find "rg")
+          (should (equal (mega-search-test--found dir 'rg)
+                         (funcall all tracked untracked)))
+          (should (equal (mega-search-test--found dir 'rg 'untracked)
+                         (funcall all tracked untracked)))
+          (should (equal (mega-search-test--found dir 'rg 'hidden)
+                         (funcall all tracked untracked hidden)))
+          (should (equal (mega-search-test--found dir 'rg 'ignored)
+                         (funcall all tracked untracked ignored)))
+          (should (equal (mega-search-test--found dir 'rg 'ignored 'hidden)
+                         (funcall all tracked untracked ignored hidden))))
+        ;; grep: untracked and ignored files always; hidden when asked.
+        ;; Without them it must still find the rest: `.' is a name that
+        ;; starts with a dot, and once excluded the whole search with it.
+        (should (equal (mega-search-test--found dir 'grep)
+                       (funcall all tracked untracked ignored)))
+        (should (equal (mega-search-test--found dir 'grep 'ignored 'untracked)
+                       (funcall all tracked untracked ignored)))
+        (should (equal (mega-search-test--found dir 'grep 'hidden)
+                       (funcall all tracked untracked ignored hidden)))))))
+
+(ert-deftest mega-search-the-settings-line-says-only-what-the-program-acts-on ()
+  "What a program does whatever you say is not shown as a setting of it."
+  (mega-search-test--defaults
+    (let ((mega-search-untracked t) (mega-search-ignored t)
+          (mega-search-hidden t) (mega-search-submodules nil))
+      (let ((mega-search--backend 'git))
+        (should (equal (mega-search-describe) "git  case:smart +untracked +ignored")))
+      (let ((mega-search--backend 'rg))
+        (should (equal (mega-search-describe) "rg  case:smart +ignored +hidden")))
+      (let ((mega-search--backend 'grep))
+        (should (equal (mega-search-describe) "grep  case:smart +hidden"))))
+    ;; To git, ignored files are untracked ones: one brings the other.
+    (let ((mega-search-untracked nil) (mega-search-ignored t) (mega-search--backend 'git))
+      (should (equal (mega-search-describe) "git  case:smart +untracked +ignored")))
+    (let ((mega-search-untracked nil) (mega-search-hidden nil))
+      (dolist (backend '(git rg grep))
+        (let ((mega-search--backend backend))
+          (should (equal (mega-search-describe) (format "%s  case:smart" backend))))))))
+
+(ert-deftest mega-search-a-key-the-program-cannot-act-on-says-so ()
+  "Never a key that does nothing without a word; and it is remembered."
+  (mega-search-test--defaults
+    (let ((said nil))
+      (cl-letf (((symbol-function 'mega-pick-refresh) #'ignore)
+                ((symbol-function 'minibuffer-message)
+                 (lambda (format &rest arguments)
+                   (setq said (apply #'format format arguments)))))
+        (let ((mega-search--backend 'rg))
+          (mega-search-toggle-untracked)
+          (should-not mega-search-untracked)
+          (should (string-match-p "\\`\\[rg  case:smart \\+hidden\\]  ripgrep cannot tell untracked"
+                                  said))
+          ;; One it does act on: just the settings.
+          (mega-search-toggle-hidden)
+          (should (equal said "[rg  case:smart]"))
+          (mega-search-toggle-submodules)
+          (should (string-match-p "goes into a submodule" said)))
+        (let ((mega-search--backend 'grep))
+          (mega-search-toggle-ignored)
+          (should (string-match-p "grep knows no ignore files" said)))
+        (let ((mega-search--backend 'git))
+          (mega-search-toggle-hidden)
+          (should (string-match-p "git grep searches hidden files always" said))
+          ;; What was pressed under ripgrep counts now that git is asked.
+          (should (string-match-p "\\+submodules" said))
+          (mega-search-toggle-word)
+          (should-not (string-match-p "always\\|cannot" said)))))))
 
 (ert-deftest mega-search-git-honours-case-word-and-literal ()
   (skip-unless (executable-find "git"))
@@ -353,9 +457,9 @@ And git refuses --recurse-submodules together with --untracked."
                             (append (mega-search-command 'rg "needle" nil)
                                     (mega-search-command 'grep "needle" nil))))
       (let ((mega-search--backend 'git))
-        (should (equal (mega-search-describe) "git  case:smart +submodules +hidden")))
+        (should (equal (mega-search-describe) "git  case:smart +submodules")))
       (let ((mega-search--backend 'rg))
-        (should (equal (mega-search-describe) "rg  case:smart +untracked +hidden"))))))
+        (should (equal (mega-search-describe) "rg  case:smart +hidden"))))))
 
 (ert-deftest mega-search-git-really-searches-the-submodules-when-asked ()
   (skip-unless (executable-find "git"))
@@ -404,9 +508,11 @@ And git refuses --recurse-submodules together with --untracked."
 (ert-deftest mega-search-the-description-names-what-is-on ()
   (mega-search-test--defaults
     (let ((mega-search--backend 'rg))
-      (should (equal (mega-search-describe) "rg  case:smart +untracked +hidden"))
+      (should (equal (mega-search-describe) "rg  case:smart +hidden"))
       (let ((mega-search-word t) (mega-search-hidden nil))
-        (should (equal (mega-search-describe) "rg  case:smart +untracked words"))))))
+        (should (equal (mega-search-describe) "rg  case:smart words"))))
+    (let ((mega-search--backend 'git))
+      (should (equal (mega-search-describe) "git  case:smart +untracked")))))
 
 ;;;; The whole command
 
