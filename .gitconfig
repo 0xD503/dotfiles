@@ -133,6 +133,7 @@
 	ciassfh = commit --all --signoff --gpg-sign --fixup HEAD
 	ciassf = commit --all --signoff --gpg-sign --fixup
 	mgff = merge --ff
+	rtao = remote add origin
 [core]
 	editor = emacs -nw -q
 [init]
