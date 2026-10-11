@@ -6,76 +6,93 @@
 // To see all of Zed's default settings without changing your
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
+//
+// In order of what matters: what leaves the machine, what a project may
+// do, what keeps work safe, and then how it looks and feels.  Every key
+// here was checked against the defaults of Zed 1.23.
 {
-  /* Duplicated key auto-commented: "agent": {
-    "default_model": {
-      "provider": "ollama",
-      "model": "llama3.2:latest"
+  // ---- What leaves the machine --------------------------------------
+
+  "telemetry": {
+    "metrics": false,
+    "diagnostics": false,
+    // Never a model whose provider keeps what it is sent.
+    "anthropic_retention": false,
+  },
+  "edit_predictions": {
+    "provider": "none",
+    // Whatever the status bar toggle was ever set to.
+    "allow_data_collection": "no",
+  },
+  // The avatars beside `git blame` are fetched from the host of the
+  // repository, commit by commit.
+  "git": {
+    "blame": {
+      "show_avatar": false,
     },
-    "model_parameters": []
-  }, */
-  "ssh_connections": [],
-  "tab_bar": {
-    "show_pinned_tabs_in_separate_row": false,
   },
-  "tabs": {
-    "show_diagnostics": "off",
-    "file_icons": true,
-    "git_status": true,
+  // Zed installs this one by itself at startup unless told not to.
+  "auto_install_extensions": {
+    "html": false,
   },
-  "agent_servers": {
-    "claude-acp": {
-      "type": "registry",
-    },
+  // Calls and channels: nothing is shared, and nobody is heard, by default.
+  "calls": {
+    "mute_on_join": true,
+    "share_on_join": false,
   },
-  "title_bar": {
-    "show_branch_status_icon": true,
+  "collaboration_panel": {
+    "button": false,
   },
-  "status_bar": {
-    "line_endings_button": true,
+
+  // ---- What a project, a file or a model may do -----------------------
+
+  "session": {
+    // A project is asked about before its settings are applied and its
+    // language and MCP servers are downloaded and started.  This is the
+    // default; it is written down because everything below leans on it.
+    "trust_all_worktrees": false,
+    "restore_unsaved_buffers": true,
   },
-  "active_pane_modifiers": {
-    "inactive_opacity": 0.7,
-  },
-  "format_on_save": "on",
-  "indent_guides": {
-    "background_coloring": "disabled",
-    "coloring": "indent_aware",
-    "enabled": true,
-  },
+  // Files the agent's own tools refuse to read, and whose values can be
+  // hidden on screen.  A list given here replaces Zed's, so its six come
+  // first.
+  "private_files": [
+    "**/.env*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.cert",
+    "**/*.crt",
+    "**/secrets.yml",
+    "**/.ssh/**",
+    "**/.gnupg/**",
+    "**/id_rsa*",
+    "**/id_ed25519*",
+    "**/id_ecdsa*",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.kdbx",
+    "**/.netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/.git-credentials",
+    "**/.aws/credentials",
+    "**/.config/gh/hosts.yml",
+    "**/.gitconfig.signing",
+  ],
   "terminal": {
     "font_size": 16.0,
     "font_family": ".ZedMono",
     "scrollbar": {
       "show": "auto",
     },
+    // A terminal opened in a project does not run that project's
+    // `venv/bin/activate` unasked.
+    "detect_venv": "off",
   },
-  "show_whitespaces": "trailing",
-  "hide_mouse": "on_typing_and_action",
-  "cursor_shape": "bar",
-  "cursor_blink": true,
-  "current_line_highlight": "all",
-  "project_panel": {
-    "dock": "left",
+  // No kernel to run code in is looked for.
+  "jupyter": {
+    "enabled": false,
   },
-  "git_panel": {
-    "dock": "left",
-    "tree_view": false,
-  },
-  "colorize_brackets": true,
-  "disable_ai": false,
-  "toolbar": {
-    "breadcrumbs": true,
-    "code_actions": true,
-  },
-  "minimap": {
-    "display_in": "all_editors",
-    "show": "auto",
-  },
-  "edit_predictions": {
-    "provider": "none",
-  },
-  "base_keymap": "VSCode",
   "agent": {
     "threads_sidebar": {
       "position": "right",
@@ -85,24 +102,140 @@
       "provider": "ollama",
       "model": "qwen2.5-coder:14b",
     },
+    // The thumbs under an answer send the conversation to Zed.
+    "enable_feedback": false,
+    "tool_permissions": {
+      // Every action of a tool is asked about first.
+      "default": "confirm",
+      "tools": {
+        // Asked about even where the terminal is one day allowed.
+        "terminal": {
+          "default": "confirm",
+          "always_confirm": [
+            { "pattern": "git\\s+(reset\\s+--hard|clean\\s+-[a-zA-Z]*f)" },
+            { "pattern": "git\\s+push\\s+.*(--force|-f\\b)" },
+            { "pattern": "\\brm\\s+-[a-zA-Z]*[rRf]" },
+            { "pattern": "\\bsudo\\b" },
+            { "pattern": "(curl|wget)\\b.*\\|\\s*(ba|z)?sh\\b" },
+          ],
+        },
+        // Secrets and credentials are not a model's to read or to write.
+        "read_file": {
+          "default": "confirm",
+          "always_deny": [
+            { "pattern": "\\.env($|\\.)" },
+            { "pattern": "(^|/)secrets?/" },
+            { "pattern": "\\.(pem|key|p12|pfx|kdbx)$" },
+            { "pattern": "(^|/)\\.(ssh|gnupg)/" },
+            { "pattern": "(^|/)id_(rsa|ed25519|ecdsa)" },
+          ],
+        },
+        "edit_file": {
+          "default": "confirm",
+          "always_deny": [
+            { "pattern": "\\.env($|\\.)" },
+            { "pattern": "(^|/)secrets?/" },
+            { "pattern": "\\.(pem|key|p12|pfx|kdbx)$" },
+            { "pattern": "(^|/)\\.(ssh|gnupg)/" },
+            { "pattern": "(^|/)id_(rsa|ed25519|ecdsa)" },
+          ],
+        },
+        "write_file": {
+          "default": "confirm",
+          "always_deny": [
+            { "pattern": "\\.env($|\\.)" },
+            { "pattern": "(^|/)secrets?/" },
+            { "pattern": "\\.(pem|key|p12|pfx|kdbx)$" },
+            { "pattern": "(^|/)\\.(ssh|gnupg)/" },
+            { "pattern": "(^|/)id_(rsa|ed25519|ecdsa)" },
+          ],
+        },
+      },
+    },
   },
+  "agent_servers": {
+    "claude-acp": {
+      "type": "registry",
+    },
+  },
+  "disable_ai": false,
+  "ssh_connections": [],
+  "use_podman": true,
+
+  // ---- Editing --------------------------------------------------------
+
+  "base_keymap": "VSCode",
   // "base_keymap": "Emacs",
   "vim_mode": false,
-  "telemetry": {
-    "metrics": false,
-    "diagnostics": false,
+  "format_on_save": "on",
+  "soft_wrap": "none",
+  "preferred_line_length": 80,
+  "show_whitespaces": "trailing",
+  "colorize_brackets": true,
+  "indent_guides": {
+    "background_coloring": "disabled",
+    "coloring": "indent_aware",
+    "enabled": true,
+  },
+  // The function or block you are in stays at the top of the editor.
+  "sticky_scroll": {
+    "enabled": true,
+  },
+  // After the first key of a binding, the keys that can follow are listed.
+  "which_key": {
+    "enabled": true,
+  },
+
+  // ---- Looks ----------------------------------------------------------
+
+  // "MEGA Hacker", green on black from the palette of the Emacs theme of
+  // that name, is in themes/ beside this file: `theme selector: toggle`.
+  "theme": {
+    "mode": "dark",
+    "light": "One Light",
+    "dark": "One Dark",
   },
   "ui_font_size": 16,
   "buffer_font_size": 16,
   "buffer_font_features": {
     "liga": true,
   },
-  "theme": {
-    "mode": "dark",
-    "light": "One Light",
-    "dark": "One Dark",
+  "cursor_shape": "bar",
+  "cursor_blink": true,
+  "current_line_highlight": "all",
+  "hide_mouse": "on_typing_and_action",
+  "active_pane_modifiers": {
+    "inactive_opacity": 0.7,
   },
-  "soft_wrap": "prefer_line",
-  "preferred_line_length": 80,
-  "use_podman": true,
+  "minimap": {
+    "display_in": "all_editors",
+    "show": "auto",
+  },
+  "title_bar": {
+    "show_branch_status_icon": true,
+    // No banners about what is new or on offer.
+    "show_onboarding_banner": false,
+  },
+  "tab_bar": {
+    "show_pinned_tabs_in_separate_row": false,
+  },
+  "tabs": {
+    "show_diagnostics": "off",
+    "file_icons": true,
+    "git_status": true,
+  },
+  "toolbar": {
+    "breadcrumbs": true,
+    "code_actions": true,
+  },
+  "status_bar": {
+    "line_endings_button": true,
+  },
+  "project_panel": {
+    "dock": "left",
+  },
+  "git_panel": {
+    "dock": "left",
+    "tree_view": false,
+  },
 }
