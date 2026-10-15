@@ -142,6 +142,7 @@
 	ciassf = commit --all --signoff --gpg-sign --fixup
 	mgff = merge --ff
 	rtao = remote add origin
+	plom = pull origin master
 [core]
 	editor = emacs -nw -q
 [init]
