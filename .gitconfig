@@ -143,6 +143,8 @@
 	mgff = merge --ff
 	rtao = remote add origin
 	plom = pull origin master
+	rta = remote add origin
+	pshum = push --set-upstream origin master
 [core]
 	editor = emacs -nw -q
 [init]
