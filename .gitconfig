@@ -147,6 +147,7 @@
 	pshum = push --set-upstream origin master
 [core]
 	editor = emacs -nw -q
+	pager = delta || less
 [init]
 	defaultBranch = master
 [merge]
@@ -155,6 +156,7 @@
 	algorithm = histogram
 	colorMoved = zebra
 	colorMovedWS = allow-indentation-change
+	renames = true
 [branch]
 	sort = -committerdate
 [grep]
@@ -164,6 +166,11 @@
 	column = true
 [pager]
 	grep = false
+[delta]
+	line-numbers = true
+	dark = true
+	hyperlinks = true
+	features = my-dark-theme zebra-dark
 
 ## this setting should be last
 [include]
