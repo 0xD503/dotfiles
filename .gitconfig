@@ -146,6 +146,7 @@
 	rta = remote add origin
 	pshum = push --set-upstream origin master
 	rvh = revert HEAD
+	rsa = restore .
 [core]
 	editor = emacs -nw -q
 	pager = delta || less -R
