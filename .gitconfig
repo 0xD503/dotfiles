@@ -145,6 +145,7 @@
 	plom = pull origin master
 	rta = remote add origin
 	pshum = push --set-upstream origin master
+	rvh = revert HEAD
 [core]
 	editor = emacs -nw -q
 	pager = delta || less -R
@@ -173,6 +174,7 @@
 	features = my-dark-theme zebra-dark
 	hyperlinks = true
 	hyperlinks-file-link-format = "zed://file/{path}:{line}:{column}"
+	#hyperlinks-file-link-format = "file://{path}:{line}:{column}"
 
 ## this setting should be last
 [include]
