@@ -326,10 +326,10 @@ tmux_conf_copy_to_os_clipboard=false
 # -- user customizations -------------------------------------------------------
 # this is the place to override or undo settings
 
-# increase history size
-set -g history-limit 10000
+## increase history size
+set -g history-limit 25000
 
-# start with mouse mode enabled
+### start with mouse mode enabled
 #set -g mouse on
 
 # force Vi mode
@@ -350,8 +350,11 @@ set -g prefix2 C-0
 bind Escape send-prefix
 #bind C-0 send-prefix
 
-# move status line to top
+### move status line to top
 #set -g status-position top
+
+### allow passthrough for OSC 8 hyperlinks
+#set -g allow-passthrough on
 
 
 # -- tpm -----------------------------------------------------------------------
