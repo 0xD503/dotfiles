@@ -165,7 +165,7 @@
 	fullName = true
 	column = true
 [pager]
-	grep = false
+	grep = delta --paging=never || cat
 	branch = false
 [delta]
 	line-numbers = true
