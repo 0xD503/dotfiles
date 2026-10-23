@@ -147,7 +147,7 @@
 	pshum = push --set-upstream origin master
 [core]
 	editor = emacs -nw -q
-	pager = delta || less
+	pager = delta || less -R
 [init]
 	defaultBranch = master
 [merge]
@@ -166,11 +166,13 @@
 	column = true
 [pager]
 	grep = false
+	branch = false
 [delta]
 	line-numbers = true
 	dark = true
-	hyperlinks = true
 	features = my-dark-theme zebra-dark
+	hyperlinks = true
+	hyperlinks-file-link-format = "zed://file/{path}:{line}:{column}"
 
 ## this setting should be last
 [include]
