@@ -329,6 +329,10 @@ tmux_conf_copy_to_os_clipboard=false
 ## increase history size
 set -g history-limit 25000
 
+## pass OSC 8 hyperlinks (delta, ls --hyperlink, gcc) on to the terminal;
+## tmux drops them for any terminal not listed here, whatever TERM is inside
+set -as terminal-features ",xterm*:hyperlinks"
+
 ### start with mouse mode enabled
 #set -g mouse on
 
