@@ -174,10 +174,11 @@
 	dark = true
 	features = my-dark-theme zebra-dark
 	hyperlinks = true
-	## delta knows {path} and {line} only: a {column} stays in the link as
-	## it is written. For links to the column, `rg` (see ~/.aliases).
-	hyperlinks-file-link-format = "zed://file/{path}:{line}"
-	#hyperlinks-file-link-format = "file://{path}"
+	## delta does not fill {column} yet (0.16.5, nor its main branch): it
+	## stays in the link as written, and Zed opens at the line. Kept for the
+	## day it does. Links to the column meanwhile: `rg` (see ~/.aliases).
+	hyperlinks-file-link-format = "zed://file/{path}:{line}:{column}"
+	#hyperlinks-file-link-format = "file://{path}:{line}:{column}"
 
 ## this setting should be last
 [include]
