@@ -1,1 +1,5 @@
-
+# On a dev server, ripgrep's links (see ~/.aliases) open the file there in the
+# local machine's editor, over ssh. Uncomment the line for the editor in use.
+# DEVBOX is this server's Host in the local machine's ~/.ssh/config.
+#alias rg >/dev/null 2>&1 && alias rg='rg --hyperlink-format="zed://ssh/DEVBOX{path}:{line}:{column}"'
+#alias rg >/dev/null 2>&1 && alias rg='rg --hyperlink-format="vscode://vscode-remote/ssh-remote+DEVBOX{path}:{line}:{column}"'

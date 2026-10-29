@@ -2,5 +2,12 @@
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
 
+## On a dev server, delta's links open the file there in the local machine's
+## editor, over ssh. Uncomment [delta] and the line for the editor in use.
+## DEVBOX is this server's Host in the local machine's ~/.ssh/config.
+#[delta]
+#	hyperlinks-file-link-format = "zed://ssh/DEVBOX{path}:{line}:{column}"
+#	hyperlinks-file-link-format = "vscode://vscode-remote/ssh-remote+DEVBOX{path}:{line}"
+
 [include]
 	path = ~/.gitconfig.signing
