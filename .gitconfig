@@ -93,7 +93,7 @@
 	pbo = pull --rebase origin
 	pbom = pull --rebase origin master
 	clnall = "!git clean --force --force -d -x; git submodule foreach --recursive \"git clean --force --force -d -x\""
-	speedup = !git reflog expire --expire=now --all && git pack-refs --all --prune && git gc --prune=now && git commit-graph write --reachable --changed-paths && git update-index --refresh
+	speedup = !git gc && git commit-graph write --reachable --changed-paths
 	pshuo = push --set-upstream origin
 	plo = pull origin
 	rbet = rebase --edit-todo
@@ -102,7 +102,7 @@
 	wtp = worktree prune
 	dh = diff HEAD
 	stshp = stash show --patch
-	speedup-deep = !git reflog expire --expire=now --all && git gc --aggressive --prune=now && git commit-graph write --reachable --changed-paths
+	speedup-deep = !git gc --aggressive && git commit-graph write --reachable --changed-paths
 	aliases = config --get-regexp '^alias\\.'
 	undo = reset --soft HEAD~1
 	rvab = revert --abort
@@ -147,6 +147,8 @@
 	pshum = push --set-upstream origin master
 	rvh = revert HEAD
 	rsa = restore .
+	speedup-unsafe = !git reflog expire --expire=now --all && git pack-refs --all --prune && git gc --prune=now && git commit-graph write --reachable --changed-paths && git update-index --refresh
+	speedup-deep-unsafe = !git reflog expire --expire=now --all && git gc --aggressive --prune=now && git commit-graph write --reachable --changed-paths
 [core]
 	editor = emacs -nw -q
 	pager = delta || less -R
@@ -169,14 +171,17 @@
 [pager]
 	grep = delta --paging=never || cat
 	branch = false
+[pull]
+	ff = only
+[push]
+	autoSetupRemote = true
+[help]
+	autocorrect = prompt
 [delta]
 	line-numbers = true
 	dark = true
 	features = my-dark-theme zebra-dark
 	hyperlinks = true
-	## delta does not fill {column} yet (0.16.5, nor its main branch): it
-	## stays in the link as written, and Zed opens at the line. Kept for the
-	## day it does. Links to the column meanwhile: `rg` (see ~/.aliases).
 	hyperlinks-file-link-format = "zed://file/{path}:{line}:{column}"
 	#hyperlinks-file-link-format = "file://{path}:{line}:{column}"
 
