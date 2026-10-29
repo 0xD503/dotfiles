@@ -32,6 +32,14 @@ if grep --color=auto '' /dev/null >/dev/null 2>&1; then
     alias egrep='egrep --color=auto'
 fi
 
+# ripgrep 14+ links each hit to Zed at its line and column, which delta (git
+# grep's pager) cannot do. Links are written only to a terminal, so a pipe
+# gets plain text. An older ripgrep refuses the flag, and goes without.
+if command -v rg >/dev/null 2>&1 &&
+    rg --hyperlink-format=none --version </dev/null >/dev/null 2>&1; then
+    alias rg='rg --hyperlink-format="zed://file{path}:{line}:{column}"'
+fi
+
 alias ll='ls -l'
 alias la='ls -A'
 alias l='ls -CF'
