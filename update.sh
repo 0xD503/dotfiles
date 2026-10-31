@@ -27,7 +27,8 @@ CHANGES=0
 # Space-separated, compared literally against the repo-relative path. An entry
 # that is a directory, like tests, leaves out everything below it.
 #
-# The .local files are here as empty stubs to copy by hand. A plain command
+# The .local files are here as stubs to copy by hand: what one machine sets
+# for itself, much of it commented out to choose from. A plain command
 # must never deploy or collect them: deploying would overwrite whatever that
 # machine keeps in them, and collecting would push one machine's overrides to
 # all the others. Only the `local` prefix reaches them, and only on request.

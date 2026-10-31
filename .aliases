@@ -35,11 +35,10 @@ fi
 # ripgrep 14+ links each hit to Zed at its line and column, which delta (git
 # grep's pager) cannot do. Links are written only to a terminal, so a pipe
 # gets plain text. An older ripgrep refuses the flag, and goes without.
-# The second is for VS Code; a dev server re-points it in its ~/.*rc.local.
+# Another editor, or a dev server, is chosen in ~/.bashrc.local or ~/.zshrc.local.
 if command -v rg >/dev/null 2>&1 &&
     rg --hyperlink-format=none --version </dev/null >/dev/null 2>&1; then
     alias rg='rg --hyperlink-format="zed://file{path}:{line}:{column}"'
-    #alias rg='rg --hyperlink-format=vscode'
 fi
 
 alias ll='ls -l'

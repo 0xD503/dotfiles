@@ -2,12 +2,22 @@
 	name = Ruslan Vostretsov
 	email = antanta.twwk@gmail.com
 
-## On a dev server, delta's links open the file there in the local machine's
-## editor, over ssh. Uncomment [delta] and the line for the editor in use.
-## DEVBOX is this server's Host in the local machine's ~/.ssh/config.
+## Which editor delta's links open. ~/.gitconfig has Zed on this machine;
+## for another, uncomment [delta] and ONE of the lines below it (with two, the
+## last one wins). DEVBOX is this server's Host in ~/.ssh/config of the
+## machine you ssh from. VS Code gets no {column}: delta leaves it unfilled,
+## and VS Code would take it for part of the file name.
 #[delta]
+## VS Code, on this machine:
+#	hyperlinks-file-link-format = "vscode://file{path}:{line}"
+## On a dev server, the file opened there from Zed on the machine you ssh from:
 #	hyperlinks-file-link-format = "zed://ssh/DEVBOX{path}:{line}:{column}"
+## The same, from VS Code:
 #	hyperlinks-file-link-format = "vscode://vscode-remote/ssh-remote+DEVBOX{path}:{line}"
+
+## Where VS Code is the one editor allowed, for commit messages too.
+#[core]
+#	editor = code --wait
 
 [include]
 	path = ~/.gitconfig.signing

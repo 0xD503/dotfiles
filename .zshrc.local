@@ -1,5 +1,9 @@
-# On a dev server, ripgrep's links (see ~/.aliases) open the file there in the
-# local machine's editor, over ssh. Uncomment the line for the editor in use.
-# DEVBOX is this server's Host in the local machine's ~/.ssh/config.
+# Which editor ripgrep's links open. ~/.aliases has Zed on this machine; for
+# another, uncomment ONE line below. DEVBOX is this server's Host in
+# ~/.ssh/config of the machine you ssh from.
+# VS Code, on this machine:
+#alias rg >/dev/null 2>&1 && alias rg='rg --hyperlink-format=vscode'
+# On a dev server, the file opened there from Zed on the machine you ssh from:
 #alias rg >/dev/null 2>&1 && alias rg='rg --hyperlink-format="zed://ssh/DEVBOX{path}:{line}:{column}"'
+# The same, from VS Code:
 #alias rg >/dev/null 2>&1 && alias rg='rg --hyperlink-format="vscode://vscode-remote/ssh-remote+DEVBOX{path}:{line}:{column}"'

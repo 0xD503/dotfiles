@@ -182,12 +182,9 @@
 	dark = true
 	features = my-dark-theme zebra-dark
 	hyperlinks = true
-	## These open files on this machine. A dev server's ~/.gitconfig.local
-	## links back over ssh instead.
+	## Zed, on this machine. Another editor, or a dev server, is chosen in
+	## ~/.gitconfig.local.
 	hyperlinks-file-link-format = "zed://file{path}:{line}:{column}"
-	## No {column} for VS Code: delta leaves it unfilled, and VS Code would
-	## take it for part of the file name.
-	#hyperlinks-file-link-format = "vscode://file{path}:{line}"
 	#hyperlinks-file-link-format = "file://{path}:{line}:{column}"
 
 ## this setting should be last
