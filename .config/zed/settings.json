@@ -188,6 +188,11 @@
 
   // ---- Looks ----------------------------------------------------------
 
+  // A new window (`ctrl-shift-n`) opens on the launchpad, the recent
+  // projects, not an empty untitled file.  This is the default, written
+  // down; `zed --new`, which the launcher's "Open a new workspace" runs,
+  // makes an untitled file whatever this says.
+  "on_new_window": "launchpad",
   // "MEGA Hacker", green on black from the palette of the Emacs theme of
   // that name, is in themes/ beside this file: `theme selector: toggle`.
   "theme": {
