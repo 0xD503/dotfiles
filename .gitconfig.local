@@ -1,6 +1,6 @@
-[user]
-	name = Ruslan Vostretsov
-	email = antanta.twwk@gmail.com
+[include]
+	path = ~/.gitconfig.local.user.name
+	path = ~/.gitconfig.local.user.email
 
 ## Which editor delta's links open. ~/.gitconfig has Zed on this machine;
 ## for another, uncomment [delta] and ONE of the lines below it (with two, the
