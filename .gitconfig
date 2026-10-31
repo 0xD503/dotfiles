@@ -177,6 +177,10 @@
 	autoSetupRemote = true
 [help]
 	autocorrect = prompt
+## Without user.email (~/.gitconfig.local.user.email missing), git refuses to
+## commit. Otherwise it makes one up, from $EMAIL or your login and host names.
+[user]
+	useConfigOnly = true
 [delta]
 	line-numbers = true
 	dark = true

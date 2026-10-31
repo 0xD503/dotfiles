@@ -1,3 +1,6 @@
+## Who you are, a file each: the name is the same everywhere, the email is
+## this machine's (personal, work, ...). Change ~/.gitconfig.local.user.email
+## on a machine, and this file stays the same as the one in the repo.
 [include]
 	path = ~/.gitconfig.local.user.name
 	path = ~/.gitconfig.local.user.email
