@@ -149,6 +149,9 @@
 	rsa = restore .
 	speedup-unsafe = !git reflog expire --expire=now --all && git pack-refs --all --prune && git gc --prune=now && git commit-graph write --reachable --changed-paths && git update-index --refresh
 	speedup-deep-unsafe = !git reflog expire --expire=now --all && git gc --aggressive --prune=now && git commit-graph write --reachable --changed-paths
+	bra = branch --all
+	brr = branch --remote
+	ls = ls-tree --abbrev --long -r HEAD
 [core]
 	editor = emacs -nw -q
 	pager = delta || less -R
